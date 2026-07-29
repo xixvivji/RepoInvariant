@@ -1,0 +1,58 @@
+name: RepoTruth
+description: Catch environment and feature-traceability contract drift before merge.
+author: xixvivji
+
+branding:
+  icon: check-circle
+  color: purple
+
+inputs:
+  path:
+    description: Repository path to scan.
+    required: false
+    default: .
+  config:
+    description: Optional repository-relative configuration path.
+    required: false
+    default: ""
+  format:
+    description: Report format (text, json, markdown, or sarif).
+    required: false
+    default: text
+  output:
+    description: Optional report output path.
+    required: false
+    default: ""
+  fail-on:
+    description: Minimum blocking severity (error or warning).
+    required: false
+    default: error
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install pinned RepoTruth action source
+      shell: bash
+      run: python -m pip install "${{ github.action_path }}"
+    - name: Check repository contracts
+      shell: bash
+      env:
+        REPOTRUTH_PATH: ${{ inputs.path }}
+        REPOTRUTH_CONFIG: ${{ inputs.config }}
+        REPOTRUTH_FORMAT: ${{ inputs.format }}
+        REPOTRUTH_OUTPUT: ${{ inputs.output }}
+        REPOTRUTH_FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        args=(check "$REPOTRUTH_PATH" --format "$REPOTRUTH_FORMAT" --fail-on "$REPOTRUTH_FAIL_ON")
+        if [[ -n "$REPOTRUTH_CONFIG" ]]; then
+          args+=(--config "$REPOTRUTH_CONFIG")
+        fi
+        if [[ -n "$REPOTRUTH_OUTPUT" ]]; then
+          args+=(--output "$REPOTRUTH_OUTPUT")
+        fi
+        repotruth "${args[@]}"
+

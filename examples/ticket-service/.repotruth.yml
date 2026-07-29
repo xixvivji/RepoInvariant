@@ -1,0 +1,18 @@
+version: 1
+
+env:
+  contracts: [.env.example]
+  compose: [compose.yml]
+  kubernetes: []
+  workflows: []
+  spring: [src/main/resources/application.yml]
+  ignore: []
+
+features:
+  requirements: [docs/requirements.md]
+  specifications: [openapi.yml]
+  tests: [tests/**/*.py]
+  id_pattern: '\bREQ-[A-Z0-9][A-Z0-9-]*\b'
+  openapi_extension: x-feature-id
+  ignore: []
+

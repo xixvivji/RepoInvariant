@@ -1,0 +1,29 @@
+version: 1
+
+env:
+  contracts: []
+  compose: []
+  kubernetes: []
+  workflows:
+    - .github/workflows/*.yml
+  spring: []
+  ignore:
+    - CI
+    - HOME
+    - PATH
+    - PWD
+    - SHELL
+    - USER
+    - GITHUB_*
+    - RUNNER_*
+    - UV_*
+    - PYTHON*
+
+features:
+  requirements: []
+  specifications: []
+  tests: []
+  id_pattern: '\bREQ-[A-Z0-9][A-Z0-9-]*\b'
+  openapi_extension: x-feature-id
+  ignore: []
+

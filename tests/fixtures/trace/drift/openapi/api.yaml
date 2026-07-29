@@ -1,0 +1,9 @@
+openapi: 3.1.0
+info: {title: Drift API, version: 1.0.0}
+paths:
+  /things:
+    get:
+      x-feature-id: [REQ-DUP, REQ-ORPHAN]
+      responses:
+        "200": {description: OK}
+

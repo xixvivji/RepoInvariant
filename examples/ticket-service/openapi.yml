@@ -1,0 +1,12 @@
+openapi: 3.1.0
+info:
+  title: Ticket service
+  version: 0.1.0
+paths:
+  /holds:
+    post:
+      x-feature-id: REQ-HOLD-CREATE
+      responses:
+        "201":
+          description: Hold created
+

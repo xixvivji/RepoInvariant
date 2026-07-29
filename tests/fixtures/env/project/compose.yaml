@@ -1,0 +1,12 @@
+services:
+  app:
+    env_file:
+      - runtime.env
+    environment:
+      API_URL: ${API_URL}
+      EMPTY: ""
+      PORT: ${PORT:-9090}
+      DEFAULT_DASH: ${DEFAULT_DASH-compose-dash}
+      DEFAULT_COLON: ${DEFAULT_COLON:-compose-colon}
+      COMPOSE_REQUIRED: ${COMPOSE_REQUIRED:?set COMPOSE_REQUIRED}
+      ESCAPED_REFERENCE: "$${NOT_A_CONSUMER}"

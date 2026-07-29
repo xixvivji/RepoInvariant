@@ -1,0 +1,12 @@
+name: CI
+on: push
+env:
+  GHA_TOKEN: ${{ secrets.GHA_TOKEN }}
+  ACTION_LITERAL: literal
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ vars.ACTION_VARIABLE }}"
+        env:
+          STEP_ONLY: ${{ secrets.STEP_SECRET }}

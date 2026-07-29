@@ -1,0 +1,7 @@
+services:
+  api:
+    image: example/ticket-service:local
+    environment:
+      DB_HOST: ${DB_HOST:-localhost}
+      DB_PORT: ${DB_PORT:-5432}
+

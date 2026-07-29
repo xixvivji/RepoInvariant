@@ -1,0 +1,19 @@
+openapi: 3.1.0
+info:
+  title: Account API
+  version: 1.0.0
+paths:
+  /login:
+    post:
+      x-feature-id: REQ-AUTH-1
+      responses:
+        "204":
+          description: Signed in
+  /profile:
+    patch:
+      x-feature-id:
+        - REQ-PROFILE-2
+      responses:
+        "204":
+          description: Updated
+

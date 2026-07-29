@@ -1,0 +1,149 @@
+# RepoTruth
+
+> Pre-alpha: catch contract drift across repository artifacts before merge.
+
+RepoTruth is a deterministic CLI and GitHub Action that checks whether the contracts spread
+across your repository still agree. It focuses on two expensive, repeatable failure modes:
+
+- environment variables drifting between `.env.example`, Docker Compose, Kubernetes,
+  GitHub Actions, and Spring configuration;
+- requirement IDs disappearing between Markdown, OpenAPI `x-feature-id`, and tests.
+
+It reports exact evidence instead of guessing intent. No API key, LLM, or source upload is
+required.
+
+## Status
+
+RepoTruth is under active pre-alpha development. The configuration and finding codes may change
+before `v0.1.0`. Pin a commit SHA when trying the GitHub Action.
+
+## Quick start
+
+Install from a local checkout:
+
+```bash
+git clone https://github.com/xixvivji/RepoTruth.git
+cd RepoTruth
+uv tool install .
+
+cd /path/to/your/repository
+repotruth init
+repotruth check .
+```
+
+During development, use:
+
+```bash
+uv sync --extra dev
+uv run repotruth check examples/ticket-service
+uv run pytest
+```
+
+A finding looks like this:
+
+```text
+compose.yml:12:7: error ENV001: DATABASE_URL is used but missing from the environment contract
+docs/requirements.md:18:1: error TRACE001: REQ-HOLD-CREATE is missing from the specification
+FAIL: 6 files, 2 errors, 0 warnings
+```
+
+## Configuration
+
+Run `repotruth init` to create `.repotruth.yml`:
+
+```yaml
+version: 1
+
+env:
+  contracts: [.env.example]
+  compose: [compose*.yml, docker-compose*.yml]
+  kubernetes: [k8s/**/*.yml]
+  workflows: [.github/workflows/*.yml]
+  spring:
+    - src/main/resources/application*.yml
+    - src/main/resources/application*.properties
+  ignore: [CI, HOME, PATH, GITHUB_*, RUNNER_*]
+
+features:
+  requirements: [docs/**/*.md]
+  specifications: [openapi*.yml, docs/openapi*.yml]
+  tests: [tests/**/*, src/test/**/*]
+  id_pattern: '\bREQ-[A-Z0-9][A-Z0-9-]*\b'
+  openapi_extension: x-feature-id
+  ignore: []
+```
+
+Then run one of the stable report formats:
+
+```bash
+repotruth check . --format text
+repotruth check . --format json --output repotruth-report.json
+repotruth check . --format markdown --output repotruth-report.md
+repotruth check . --format sarif --output repotruth-report.sarif
+```
+
+Exit code `0` means no blocking drift, `1` means a configured contract failed, and `2` means
+the command or configuration was invalid. Add `--fail-on warning` for a stricter merge gate.
+
+## GitHub Action
+
+The repository must be checked out before RepoTruth runs. Until the first stable tag, pin an
+exact commit SHA:
+
+```yaml
+permissions:
+  contents: read
+
+steps:
+  - uses: actions/checkout@v4
+  - uses: xixvivji/RepoTruth@<commit-sha>
+    with:
+      path: .
+      format: sarif
+      output: repotruth-report.sarif
+```
+
+The action installs only the source bundled with the pinned action revision. It does not transmit
+repository contents.
+
+## Finding codes
+
+| Code | Meaning | Default severity |
+|---|---|---|
+| `ENV001` | A consumer uses an environment variable absent from the contract | error |
+| `ENV002` | A contract variable has no discovered consumer | warning |
+| `ENV003` | Explicit defaults disagree across artifacts | warning |
+| `TRACE001` | A requirement ID is absent from the specification | error |
+| `TRACE002` | A specification ID has no requirement | error |
+| `TRACE003` | A specification ID has no test reference | error |
+| `TRACE004` | A requirement appears to be defined more than once | warning |
+
+## Design boundaries
+
+RepoTruth deliberately does not:
+
+- decide whether two differently worded requirements mean the same thing;
+- modify repository files automatically;
+- compare live infrastructure or databases;
+- print secret values found in configuration;
+- claim full OpenAPI, Compose, Kubernetes, or Spring validation.
+
+Use their native validators alongside RepoTruth. RepoTruth owns the gap **between** artifacts.
+
+## Roadmap
+
+- [x] Environment contract checks
+- [x] Requirement → OpenAPI → test traceability
+- [x] Text, JSON, Markdown, and SARIF reports
+- [x] Composite GitHub Action
+- [ ] Version-baseline contracts across Gradle, Docker, CI, and documentation
+- [ ] Reusable parser plugin API
+- [ ] PyPI trusted publishing and signed releases
+- [ ] Real-world compatibility fixtures from external projects
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) to help shape `v0.1.0`.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
+

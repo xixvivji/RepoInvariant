@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: init
+          image: example/init
+          env:
+            - name: INIT_ONLY
+              value: ready
+      containers:
+        - name: app
+          image: example/app
+          args: ["--from=${KUBE_REFERENCE}"]
+          env:
+            - name: KUBE_MODE
+              value: dev
+            - name: KUBE_MISSING
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name

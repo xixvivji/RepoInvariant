@@ -13,14 +13,14 @@ from typing import Any
 import yaml
 from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
-from repotruth.filesystem import (
+from repoinvariant.filesystem import (
     MAX_SCAN_BYTES,
     MAX_SCAN_FILES,
     contained_path,
     read_limited_text,
 )
-from repotruth.models import Finding, Location, ScanResult, Severity
-from repotruth.policy import apply_rule_policy
+from repoinvariant.models import Finding, Location, ScanResult, Severity
+from repoinvariant.policy import apply_rule_policy
 
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _DOTENV_LINE_RE = re.compile(

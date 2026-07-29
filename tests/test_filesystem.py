@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from repotruth.filesystem import atomic_write_text, read_limited_text
+from repoinvariant.filesystem import atomic_write_text, read_limited_text
 
 
 def test_descriptor_based_read_and_atomic_write(tmp_path: Path) -> None:

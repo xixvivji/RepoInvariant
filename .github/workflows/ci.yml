@@ -42,9 +42,9 @@ jobs:
       - name: Lint
         run: uv run --frozen ruff check .
       - name: Test
-        run: uv run --frozen pytest --cov=repotruth --cov-report=term-missing --cov-fail-under=85
+        run: uv run --frozen pytest --cov=repoinvariant --cov-report=term-missing --cov-fail-under=85
       - name: Dogfood
-        run: uv run --frozen repotruth check . --fail-on warning
+        run: uv run --frozen repoinvariant check . --fail-on warning
       - name: Build distributions
         if: matrix.python-version == '3.12'
         run: uv build --no-build-isolation

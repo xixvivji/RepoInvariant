@@ -5,8 +5,8 @@ from textwrap import indent
 
 import pytest
 
-from repotruth.env_contracts import scan_env_contracts
-from repotruth.filesystem import MAX_SCAN_BYTES
+from repoinvariant.env_contracts import scan_env_contracts
+from repoinvariant.filesystem import MAX_SCAN_BYTES
 
 
 def _config(section: str, filename: str) -> dict[str, list[str]]:

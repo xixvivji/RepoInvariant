@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from repotruth.models import Severity
-from repotruth.traceability import scan_traceability
+from repoinvariant.models import Severity
+from repoinvariant.traceability import scan_traceability
 
 FIXTURES = Path(__file__).parent / "fixtures" / "trace"
 

@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
-from repotruth.models import ScanResult, Severity
+from repoinvariant.models import ScanResult, Severity
 
 
 def apply_rule_policy(result: ScanResult, config: Mapping[str, Any]) -> ScanResult:

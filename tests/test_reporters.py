@@ -55,6 +55,28 @@ def test_markdown_report_escapes_table_content(tmp_path: Path) -> None:
     assert "A \\| B" in render_markdown(result, tmp_path)
 
 
+def test_markdown_report_inerts_html_and_link_syntax(tmp_path: Path) -> None:
+    result = ScanResult(
+        findings=[
+            Finding(
+                code="ENV`001",
+                message="<details> ![click](https://example.invalid) *bold* _italic_ & done",
+                severity=Severity.ERROR,
+                location=Location(Path("[source](target).yml"), 1, 1),
+            )
+        ]
+    )
+
+    report = render_markdown(result, tmp_path)
+
+    assert "<details>" not in report
+    assert "![click](https://example.invalid)" not in report
+    assert "&lt;details&gt;" in report
+    assert "&#33;&#91;click&#93;&#40;https://example.invalid&#41;" in report
+    assert "| error | ENV&#96;001 |" in report
+    assert "&#91;source&#93;&#40;target&#41;.yml" in report
+
+
 def test_sarif_report_contains_rule_and_region(tmp_path: Path) -> None:
     payload = json.loads(render_sarif(_result(), tmp_path))
     run = payload["runs"][0]
@@ -99,7 +121,7 @@ def test_human_reports_escape_control_characters_and_sarif_quotes_uri(tmp_path: 
 
     assert "./::warning\\x0afile #1.yml" in text
     assert "safe\\x0amessage" in text
-    assert "\\x0a" in markdown
+    assert "&#92;x0a" in markdown
     uri = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"][
         "artifactLocation"
     ]["uri"]

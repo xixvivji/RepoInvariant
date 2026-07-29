@@ -102,7 +102,22 @@ def render_json(
 
 
 def _escape_table(value: str) -> str:
-    return _display(value).replace("|", "\\|").replace("`", "&#96;")
+    replacements = {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\\": "&#92;",
+        "|": "\\|",
+        "`": "&#96;",
+        "[": "&#91;",
+        "]": "&#93;",
+        "(": "&#40;",
+        ")": "&#41;",
+        "!": "&#33;",
+        "*": "&#42;",
+        "_": "&#95;",
+    }
+    return "".join(replacements.get(character, character) for character in _display(value))
 
 
 def render_markdown(
@@ -124,7 +139,8 @@ def render_markdown(
             if item.location:
                 location = f"{_relative(item.location.path, root)}:{item.location.line}"
             lines.append(
-                f"| {item.severity.value} | `{item.code}` | {_escape_table(location)} | "
+                f"| {item.severity.value} | {_escape_table(item.code)} | "
+                f"{_escape_table(location)} | "
                 f"{_escape_table(item.message)} |"
             )
     else:

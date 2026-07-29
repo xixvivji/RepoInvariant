@@ -11,6 +11,7 @@ from repoinvariant import __version__
 from repoinvariant.config import CONFIG_NAME, DEFAULT_CONFIG_TEXT, ConfigError, load_config
 from repoinvariant.env_contracts import scan_env_contracts
 from repoinvariant.filesystem import atomic_write_text
+from repoinvariant.github_actions import emit_github_feedback
 from repoinvariant.models import ScanResult, Severity
 from repoinvariant.reporters import render
 from repoinvariant.traceability import scan_traceability
@@ -42,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument("--no-env", action="store_true", help="skip environment contracts")
     check.add_argument("--no-features", action="store_true", help="skip feature traceability")
+    check.add_argument("--github-actions", action="store_true", help=argparse.SUPPRESS)
 
     init = subcommands.add_parser("init", help=f"create a starter {CONFIG_NAME}")
     init.add_argument("path", nargs="?", default=".", type=Path, help="repository root")
@@ -71,12 +73,16 @@ def _check(args: argparse.Namespace) -> int:
 
     fail_on = Severity(args.fail_on)
     report = render(result, root, args.format_name, fail_on)
+    output: Path | None = None
     try:
         if args.output:
             output = atomic_write_text(root, args.output, report, label="report output")
             print(f"RepoInvariant report written to {output}", file=sys.stderr)
         else:
-            print(report, end="")
+            destination = sys.stderr if args.github_actions else sys.stdout
+            print(report, end="", file=destination)
+        if args.github_actions:
+            emit_github_feedback(result, root, fail_on, output)
     except (OSError, UnicodeError, ValueError) as exc:
         print(f"repoinvariant: {exc}", file=sys.stderr)
         return 2

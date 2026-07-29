@@ -36,6 +36,20 @@ inputs:
     required: false
     default: "false"
 
+outputs:
+  status:
+    description: Scan result after applying fail-on (pass or fail).
+    value: ${{ steps.check.outputs.status }}
+  errors:
+    description: Total number of error findings.
+    value: ${{ steps.check.outputs.errors }}
+  warnings:
+    description: Total number of warning findings.
+    value: ${{ steps.check.outputs.warnings }}
+  report-path:
+    description: Safe workspace-relative report path, or empty when unavailable.
+    value: ${{ steps.check.outputs.report-path }}
+
 runs:
   using: composite
   steps:
@@ -55,6 +69,7 @@ runs:
         REPOINVARIANT_ACTION_PATH: ${{ github.action_path }}
       run: uv sync --project "$REPOINVARIANT_ACTION_PATH" --frozen --no-dev
     - name: Check repository contracts
+      id: check
       shell: bash
       env:
         REPOINVARIANT_PATH: ${{ inputs.path }}
@@ -68,7 +83,7 @@ runs:
       run: |
         set -Eeuo pipefail
 
-        args=(check "--format=$REPOINVARIANT_FORMAT" "--fail-on=$REPOINVARIANT_FAIL_ON")
+        args=(check --github-actions "--format=$REPOINVARIANT_FORMAT" "--fail-on=$REPOINVARIANT_FAIL_ON")
         if [[ -n "$REPOINVARIANT_CONFIG" ]]; then
           args+=("--config=$REPOINVARIANT_CONFIG")
         fi

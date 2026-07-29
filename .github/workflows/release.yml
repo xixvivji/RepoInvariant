@@ -40,7 +40,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          python - <<'PY'
+          uv run --frozen python - <<'PY'
           import os
           from repoinvariant import __version__
 

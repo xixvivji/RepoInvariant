@@ -4,6 +4,18 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-29
+
+### Added
+
+- Passing and intentionally drifting ticket-service examples with regression coverage.
+- Open-source community conduct guidance and package, CI, Python, and license badges.
+
+### Changed
+
+- Documented GitHub Action usage with an immutable release commit SHA and every supported input.
+- Made contribution and license links render correctly outside GitHub.
+
 ## [0.1.0] - 2026-07-29
 
 ### Added

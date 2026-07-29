@@ -4,6 +4,8 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-29
+
 ### Added
 
 - Agent-oriented repository guidance and a safe usage-question issue form.

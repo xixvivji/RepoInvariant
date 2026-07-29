@@ -19,7 +19,7 @@ required.
 
 ## Status
 
-RepoInvariant `v0.1.0` is the first public alpha. The configuration and finding codes may change
+RepoInvariant `v0.1.1` is a public alpha. The configuration and finding codes may change
 before `v1.0.0`. Pin an exact commit SHA when using the GitHub Action.
 
 ## Quick start
@@ -82,7 +82,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-  - uses: xixvivji/RepoInvariant@7b6e624dbf45076738e6eaa830340d9ebda8e039 # v0.1.0
+  - uses: xixvivji/RepoInvariant@4f6d7c2b6fd171735f265df730c2eb743b8578af # v0.1.1
 ```
 
 The action installs only the source bundled with the pinned action revision. It does not transmit

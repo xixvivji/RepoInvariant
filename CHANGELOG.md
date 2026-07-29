@@ -4,6 +4,8 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-29
+
 ### Added
 
 - Passing and intentionally drifting ticket-service examples with regression coverage.
@@ -11,7 +13,7 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ### Changed
 
-- Replaced the GitHub Action placeholder with the immutable `v0.1.0` commit SHA.
+- Documented GitHub Action usage with an immutable release commit SHA and every supported input.
 - Made contribution and license links render correctly outside GitHub.
 
 ## [0.1.0] - 2026-07-29

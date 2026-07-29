@@ -73,6 +73,13 @@ class ScanResult:
     def ok(self) -> bool:
         return self.error_count == 0
 
+    def blocks(self, fail_on: Severity = Severity.ERROR) -> bool:
+        """Return whether findings meet the configured failure threshold."""
+
+        if self.error_count:
+            return True
+        return fail_on is Severity.WARNING and self.warning_count > 0
+
     def extend(self, other: ScanResult) -> None:
         self.findings.extend(other.findings)
         self.scanned_files.update(other.scanned_files)

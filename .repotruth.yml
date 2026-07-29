@@ -14,7 +14,9 @@ env:
     - PWD
     - SHELL
     - USER
+    - GH_TOKEN
     - GITHUB_*
+    - RELEASE_TAG
     - RUNNER_*
     - UV_*
     - PYTHON*
@@ -25,5 +27,14 @@ features:
   tests: []
   id_pattern: '\bREQ-[A-Z0-9][A-Z0-9-]*\b'
   openapi_extension: x-feature-id
+  requirements_mode: definitions
   ignore: []
 
+rules:
+  ENV001: error
+  ENV002: warning
+  ENV003: warning
+  TRACE001: error
+  TRACE002: error
+  TRACE003: error
+  TRACE004: warning

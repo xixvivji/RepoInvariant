@@ -21,6 +21,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Run the local RepoInvariant action
+        id: repoinvariant
         uses: ./
         with:
           path: .
@@ -29,11 +30,47 @@ jobs:
           fail-on: error
           no-env: "false"
           no-features: "false"
+      - name: Verify RepoInvariant outputs
+        shell: bash
+        env:
+          REPOINVARIANT_STATUS: ${{ steps.repoinvariant.outputs.status }}
+          REPOINVARIANT_ERRORS: ${{ steps.repoinvariant.outputs.errors }}
+          REPOINVARIANT_WARNINGS: ${{ steps.repoinvariant.outputs.warnings }}
+          REPOINVARIANT_REPORT_PATH: ${{ steps.repoinvariant.outputs.report-path }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$REPOINVARIANT_STATUS" == pass ]]
+          [[ "$REPOINVARIANT_ERRORS" == 0 ]]
+          [[ "$REPOINVARIANT_WARNINGS" == 0 ]]
+          [[ "$REPOINVARIANT_REPORT_PATH" == repoinvariant-report.sarif ]]
+      - name: Exercise warning annotations
+        id: warning_fixture
+        continue-on-error: true
+        uses: ./
+        with:
+          path: tests/fixtures/action-warning
+          fail-on: warning
+          no-features: "true"
+      - name: Verify warning outputs
+        shell: bash
+        env:
+          REPOINVARIANT_OUTCOME: ${{ steps.warning_fixture.outcome }}
+          REPOINVARIANT_STATUS: ${{ steps.warning_fixture.outputs.status }}
+          REPOINVARIANT_ERRORS: ${{ steps.warning_fixture.outputs.errors }}
+          REPOINVARIANT_WARNINGS: ${{ steps.warning_fixture.outputs.warnings }}
+          REPOINVARIANT_REPORT_PATH: ${{ steps.warning_fixture.outputs.report-path }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$REPOINVARIANT_OUTCOME" == failure ]]
+          [[ "$REPOINVARIANT_STATUS" == fail ]]
+          [[ "$REPOINVARIANT_ERRORS" == 0 ]]
+          [[ "$REPOINVARIANT_WARNINGS" == 1 ]]
+          [[ -z "$REPOINVARIANT_REPORT_PATH" ]]
       - name: Upload RepoInvariant SARIF report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: repoinvariant-sarif
-          path: repoinvariant-report.sarif
+          path: ${{ steps.repoinvariant.outputs.report-path || 'repoinvariant-report.sarif' }}
           if-no-files-found: warn
           retention-days: 7

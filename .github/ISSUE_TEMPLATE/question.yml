@@ -1,0 +1,45 @@
+name: Usage question
+description: Ask how to configure, adopt, or interpret RepoInvariant safely.
+title: "question: "
+labels: [question, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Questions are welcome. Use synthetic examples only; never paste credentials, private
+        repository contents, or production configuration.
+  - type: input
+    id: version
+    attributes:
+      label: RepoInvariant version
+      description: Paste `repoinvariant --version` output or an exact Action commit SHA.
+      placeholder: "repoinvariant X.Y.Z or an exact commit SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Installation or CLI
+        - Environment contracts
+        - Feature traceability
+        - Configuration or adoption
+        - Reports or GitHub Action
+        - Contributing or release process
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: Include the smallest synthetic configuration or output needed for context.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed all secrets and private repository content from this question.
+          required: true

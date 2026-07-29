@@ -4,6 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/repoinvariant.svg)](https://pypi.org/project/repoinvariant/)
 [![Python](https://img.shields.io/pypi/pyversions/repoinvariant.svg)](https://pypi.org/project/repoinvariant/)
 [![License](https://img.shields.io/pypi/l/repoinvariant.svg)](https://github.com/xixvivji/RepoInvariant/blob/main/LICENSE)
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-RepoInvariant-2ea44f?logo=github)](https://github.com/marketplace/actions/repoinvariant)
 
 > Alpha: catch contract drift across repository artifacts before merge.
 
@@ -19,8 +20,50 @@ required.
 
 ## Status
 
-RepoInvariant `v0.1.1` is a public alpha. The configuration and finding codes may change
+RepoInvariant `v0.2.0` is a public alpha. The configuration and finding codes may change
 before `v1.0.0`. Pin an exact commit SHA when using the GitHub Action.
+
+## GitHub Action
+
+The repository must be checked out before RepoInvariant runs. For supply-chain safety, pin an exact
+commit SHA:
+
+```yaml
+name: RepoInvariant
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check repository contracts
+        uses: xixvivji/RepoInvariant@17177a536e44f3b8a2de4efe94e241a9849b8bae # v0.1.1
+```
+
+The action installs only the source bundled with the pinned action revision. It does not transmit
+repository contents or require secrets.
+
+| Input | Default | Description |
+|---|---|---|
+| `path` | `.` | Repository-relative directory to scan. |
+| `config` | empty | Optional repository-relative configuration file. |
+| `format` | `text` | `text`, `json`, `markdown`, or `sarif`. |
+| `output` | empty | Optional repository-relative report path. |
+| `fail-on` | `error` | Blocking threshold: `error` or `warning`. |
+| `no-env` | `false` | Skip environment-contract checks. |
+| `no-features` | `false` | Skip feature-traceability checks. |
+
+Prefer rule-level severity configuration when only one check needs a temporary downgrade.
 
 ## Quick start
 
@@ -70,35 +113,6 @@ The drift example breaks two contracts on purpose: Compose consumes `HOLD_TTL_SE
 declaring it in `.env.example`, and the OpenAPI operation has no matching requirement ID in its
 test. Add `HOLD_TTL_SECONDS=300` to the environment contract and `REQ-HOLD-CREATE` to the test to
 make it pass.
-
-## GitHub Action
-
-The repository must be checked out before RepoInvariant runs. For supply-chain safety, pin an exact
-commit SHA:
-
-```yaml
-permissions:
-  contents: read
-
-steps:
-  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-  - uses: xixvivji/RepoInvariant@4f6d7c2b6fd171735f265df730c2eb743b8578af # v0.1.1
-```
-
-The action installs only the source bundled with the pinned action revision. It does not transmit
-repository contents or require secrets.
-
-| Input | Default | Description |
-|---|---|---|
-| `path` | `.` | Repository-relative directory to scan. |
-| `config` | empty | Optional repository-relative configuration file. |
-| `format` | `text` | `text`, `json`, `markdown`, or `sarif`. |
-| `output` | empty | Optional repository-relative report path. |
-| `fail-on` | `error` | Blocking threshold: `error` or `warning`. |
-| `no-env` | `false` | Skip environment-contract checks. |
-| `no-features` | `false` | Skip feature-traceability checks. |
-
-Prefer rule-level severity configuration when only one check needs a temporary downgrade.
 
 ## Configuration
 
@@ -205,6 +219,9 @@ descriptors so a concurrent symlink swap cannot redirect them outside the reposi
 See [CONTRIBUTING.md](https://github.com/xixvivji/RepoInvariant/blob/main/CONTRIBUTING.md)
 to help shape future releases. Participation is governed by the
 [Code of Conduct](https://github.com/xixvivji/RepoInvariant/blob/main/CODE_OF_CONDUCT.md).
+For usage help, open a
+[question](https://github.com/xixvivji/RepoInvariant/issues/new?template=question.yml) with a
+minimal synthetic example.
 
 ## License
 

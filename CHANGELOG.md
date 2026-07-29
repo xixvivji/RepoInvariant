@@ -4,6 +4,20 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-29
+
+### Added
+
+- Agent-oriented repository guidance and a safe usage-question issue form.
+- Marketplace discovery badge and a complete copy-ready GitHub Actions workflow.
+- Native GitHub annotations, Step Summary feedback, and reusable Action outputs.
+
+### Changed
+
+- Updated the documented Action pin to the exact `v0.1.1` tag commit.
+- Made version prompts in issue forms resilient to future releases.
+- Hardened Markdown and workflow-command rendering against untrusted finding content.
+
 ## [0.1.1] - 2026-07-29
 
 ### Added

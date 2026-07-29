@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 from collections import defaultdict
@@ -48,6 +49,7 @@ _TOTAL_MATCH_BUDGET_SECONDS = 1.0
 _MAX_TOTAL_MATCHES = 100_000
 _MAX_YAML_DEPTH = 128
 _MAX_YAML_NODES = 20_000
+_CUSTOM_BASELINE_DOMAIN = b"repoinvariant-custom-trace-id-v1\0"
 
 
 class _TraceFileError(ValueError):
@@ -154,6 +156,15 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
         identifier: identifier if pattern_source == DEFAULT_ID_PATTERN else f"custom-id-{index}"
         for index, identifier in enumerate(all_ids, start=1)
     }
+    baseline_ids = {
+        identifier: (
+            identifier
+            if pattern_source == DEFAULT_ID_PATTERN
+            else "custom-sha256:"
+            + hashlib.sha256(_CUSTOM_BASELINE_DOMAIN + identifier.encode("utf-8")).hexdigest()
+        )
+        for identifier in all_ids
+    }
 
     for identifier in sorted(requirement_ids - specification_ids):
         reported = reported_ids[identifier]
@@ -164,6 +175,7 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
                 severity=Severity.ERROR,
                 location=requirement_locations[identifier],
                 hint=f"Add the {reported} value to {extension} on the implementing operation.",
+                baseline_key=baseline_ids[identifier],
             )
         )
 
@@ -176,6 +188,7 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
                 severity=Severity.ERROR,
                 location=specification_locations[identifier],
                 hint="Define the requirement or remove the stale specification reference.",
+                baseline_key=baseline_ids[identifier],
             )
         )
 
@@ -188,6 +201,7 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
                 severity=Severity.ERROR,
                 location=specification_locations[identifier],
                 hint=f"Reference {reported} in a configured test file.",
+                baseline_key=baseline_ids[identifier],
             )
         )
 
@@ -211,6 +225,7 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
                 location=definitions[1],
                 hint="Keep one canonical requirement definition and link to it elsewhere.",
                 related=(definitions[0], *definitions[2:]),
+                baseline_key=baseline_ids[identifier],
             )
         )
 

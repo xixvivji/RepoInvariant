@@ -46,6 +46,12 @@ def test_reports_each_kind_of_traceability_drift_at_source_locations() -> None:
         ("TRACE004", Severity.WARNING),
     ]
     by_code = {item.code: item for item in result.findings}
+    assert {item.code: item.baseline_key for item in result.findings} == {
+        "TRACE001": "REQ-MISSING",
+        "TRACE002": "REQ-ORPHAN",
+        "TRACE003": "REQ-ORPHAN",
+        "TRACE004": "REQ-DUP",
+    }
     assert by_code["TRACE001"].location is not None
     assert by_code["TRACE001"].location.path == Path("docs/primary.md")
     assert by_code["TRACE001"].location.line == 3
@@ -275,6 +281,83 @@ def test_custom_identifiers_are_opaque_in_findings(tmp_path: Path) -> None:
     payload = repr([finding.as_dict() for finding in result.findings])
     assert canary not in payload
     assert "custom-id-1" in payload
+    assert result.findings[0].baseline_key.startswith("custom-sha256:")
+    assert canary not in result.findings[0].baseline_key
+
+
+def test_custom_baseline_keys_use_only_opaque_reported_identifiers(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "spec").mkdir()
+    requirement_id = "SYNTHETIC-PRIVATE-9"
+    specification_id = "SYNTHETIC-PRIVATE-7"
+    (tmp_path / "docs" / "requirements.md").write_text(
+        f"# {requirement_id}: Example\n", encoding="utf-8"
+    )
+    (tmp_path / "spec" / "api.yaml").write_text(
+        f"x-feature-id: {specification_id}\n", encoding="utf-8"
+    )
+
+    result = scan_traceability(
+        tmp_path,
+        _config(
+            requirements="docs/*",
+            specifications="spec/*",
+            tests=[],
+            id_pattern=r"SYNTHETIC-[A-Z0-9-]+",
+        ),
+    )
+
+    keys_by_code = {finding.code: finding.baseline_key for finding in result.findings}
+    assert keys_by_code["TRACE002"] == keys_by_code["TRACE003"]
+    assert keys_by_code["TRACE001"] != keys_by_code["TRACE002"]
+    assert all(key.startswith("custom-sha256:") for key in keys_by_code.values())
+    assert all(
+        identifier not in finding.baseline_key
+        for finding in result.findings
+        for identifier in (requirement_id, specification_id)
+    )
+
+
+def test_custom_baseline_key_does_not_reuse_an_opaque_display_ordinal(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "spec").mkdir()
+    specification = tmp_path / "spec" / "api.yaml"
+    specification.write_text("x-feature-id: SYNTHETIC-FIRST\n", encoding="utf-8")
+    config = _config(
+        requirements=[],
+        specifications="spec/*",
+        tests=[],
+        id_pattern=r"SYNTHETIC-[A-Z]+",
+    )
+
+    first = scan_traceability(tmp_path, config)
+    specification.write_text("x-feature-id: SYNTHETIC-SECOND\n", encoding="utf-8")
+    second = scan_traceability(tmp_path, config)
+
+    assert {finding.message for finding in first.findings} == {
+        "Specification references unknown requirement 'custom-id-1'.",
+        "Specification feature 'custom-id-1' has no matching test.",
+    }
+    assert {finding.message for finding in second.findings} == {
+        "Specification references unknown requirement 'custom-id-1'.",
+        "Specification feature 'custom-id-1' has no matching test.",
+    }
+    assert {finding.baseline_key for finding in first.findings}.isdisjoint(
+        finding.baseline_key for finding in second.findings
+    )
+
+    second_key = second.findings[0].baseline_key
+    (tmp_path / "spec" / "first.yaml").write_text(
+        "x-feature-id: SYNTHETIC-FIRST\n",
+        encoding="utf-8",
+    )
+    shifted = scan_traceability(tmp_path, config)
+    assert {
+        finding.baseline_key
+        for finding in shifted.findings
+        if "custom-id-2" in finding.message
+    } == {second_key}
 
 
 def test_matching_budget_is_shared_across_lines(tmp_path: Path) -> None:

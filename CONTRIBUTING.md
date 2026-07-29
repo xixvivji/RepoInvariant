@@ -2,6 +2,9 @@
 
 Thanks for helping make cross-artifact contracts boring and reliable.
 
+By participating, you agree to follow our
+[Code of Conduct](https://github.com/xixvivji/RepoInvariant/blob/main/CODE_OF_CONDUCT.md).
+
 ## Development setup
 
 RepoInvariant requires Python 3.11 or newer and uses `uv` for the contributor workflow.

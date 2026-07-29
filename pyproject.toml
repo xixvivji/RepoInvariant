@@ -44,7 +44,10 @@ repoinvariant = "repoinvariant.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/xixvivji/RepoInvariant"
+Changelog = "https://github.com/xixvivji/RepoInvariant/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/xixvivji/RepoInvariant#readme"
 Issues = "https://github.com/xixvivji/RepoInvariant/issues"
+"Release notes" = "https://github.com/xixvivji/RepoInvariant/releases"
 Source = "https://github.com/xixvivji/RepoInvariant"
 
 [tool.hatch.build.targets.wheel]

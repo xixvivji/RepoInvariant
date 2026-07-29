@@ -19,8 +19,24 @@ def test_check_clean_example_as_json(capsys) -> None:
     assert main(["check", str(example), "--format", "json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
-    assert payload["summary"]["errors"] == 0
-    assert payload["summary"]["files"] >= 5
+    assert payload["summary"] == {"errors": 0, "files": 6, "notes": 0, "warnings": 0}
+
+
+def test_drift_example_reports_expected_contract_breaks(capsys) -> None:
+    example = Path(__file__).parents[1] / "examples" / "ticket-service-drift"
+
+    assert main(["check", str(example), "--format", "json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["exit_code"] == 1
+    assert payload["summary"] == {"errors": 2, "files": 6, "notes": 0, "warnings": 0}
+    assert [
+        (finding["code"], finding["severity"], finding["location"])
+        for finding in payload["findings"]
+    ] == [
+        ("ENV001", "error", {"path": "compose.yml", "line": 7, "column": 25}),
+        ("TRACE003", "error", {"path": "openapi.yml", "line": 8, "column": 21}),
+    ]
 
 
 def test_check_returns_one_for_drift(tmp_path: Path, capsys) -> None:

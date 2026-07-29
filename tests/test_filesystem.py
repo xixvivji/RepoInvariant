@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -33,3 +34,29 @@ def test_parent_directory_symlink_cannot_redirect_read_or_write(tmp_path: Path) 
         atomic_write_text(root, root / "linked" / "report.txt", "changed\n", label="output")
 
     assert outside_file.read_text(encoding="utf-8") == "outside\n"
+
+
+def test_atomic_create_preserves_file_created_during_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    destination = root / "baseline.json"
+    real_link = os.link
+
+    def race_link(source: str, target: str, **kwargs: object) -> None:
+        destination.write_text("competing writer\n", encoding="utf-8")
+        real_link(source, target, **kwargs)
+
+    monkeypatch.setattr("repoinvariant.filesystem.os.link", race_link)
+
+    with pytest.raises(ValueError, match="already exists"):
+        atomic_write_text(
+            root,
+            destination,
+            "baseline contents\n",
+            label="baseline output",
+            overwrite=False,
+        )
+
+    assert destination.read_text(encoding="utf-8") == "competing writer\n"

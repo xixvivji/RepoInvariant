@@ -4,6 +4,27 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-29
+
+### Added
+
+- Privacy-preserving adoption baselines that snapshot existing findings and gate only new drift.
+- An optional `baseline` GitHub Action input with filtered annotations, reports, and outputs.
+
+### Changed
+
+- Updated the documented stable Action pin to an immutable `v0.3.0` release source commit.
+
+### Security
+
+- Bound baselines to the effective scan scope and reject malformed, oversized, duplicate, or
+  symlinked baseline files without retaining variable names, requirement identifiers, messages,
+  or source paths.
+- Gave opaque custom-pattern findings stable private identities so a new identifier cannot inherit
+  an accepted display ordinal.
+- Published new baseline files with atomic no-clobber semantics unless replacement is explicitly
+  requested with `--force`.
+
 ## [0.2.0] - 2026-07-29
 
 ### Added

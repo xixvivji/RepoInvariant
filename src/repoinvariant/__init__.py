@@ -3,4 +3,4 @@
 from repoinvariant.models import Finding, Location, ScanResult, Severity
 
 __all__ = ["Finding", "Location", "ScanResult", "Severity"]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

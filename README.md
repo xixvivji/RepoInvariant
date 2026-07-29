@@ -20,7 +20,7 @@ required.
 
 ## Status
 
-RepoInvariant `v0.2.0` is a public alpha. The configuration and finding codes may change
+RepoInvariant `v0.3.0` is a public alpha. The configuration and finding codes may change
 before `v1.0.0`. Pin an exact commit SHA when using the GitHub Action.
 
 ## GitHub Action
@@ -47,7 +47,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Check repository contracts
-        uses: xixvivji/RepoInvariant@17177a536e44f3b8a2de4efe94e241a9849b8bae # v0.1.1
+        uses: xixvivji/RepoInvariant@6eb532eeba44c652f1cf8d94c8831c6807091387 # v0.3.0
 ```
 
 The action installs only the source bundled with the pinned action revision. It does not transmit
@@ -59,6 +59,7 @@ repository contents or require secrets.
 | `config` | empty | Optional repository-relative configuration file. |
 | `format` | `text` | `text`, `json`, `markdown`, or `sarif`. |
 | `output` | empty | Optional repository-relative report path. |
+| `baseline` | empty | Optional repository-relative adoption baseline. |
 | `fail-on` | `error` | Blocking threshold: `error` or `warning`. |
 | `no-env` | `false` | Skip environment-contract checks. |
 | `no-features` | `false` | Skip feature-traceability checks. |
@@ -160,8 +161,50 @@ source locations remain exact, but arbitrary matched repository text never reach
 artifacts.
 
 Each finding code can be set to `error`, `warning`, or `off`. This makes staged adoption explicit:
-start a noisy rule as a warning, fix the baseline, then promote it to an error. Quote `"off"` when
-editing YAML to avoid YAML 1.1 boolean parsing surprises.
+start a noisy rule as a warning, reduce the accepted backlog, then promote it to an error. Quote
+`"off"` when editing YAML to avoid YAML 1.1 boolean parsing surprises.
+
+## Adopt an existing repository
+
+```text
+repoinvariant baseline [path] [--config FILE] [--output FILE] [--force]
+                         [--no-env] [--no-features]
+```
+
+If an established repository already has findings that cannot all be fixed at once, snapshot the
+current set and gate only newly introduced drift:
+
+```bash
+repoinvariant baseline .
+git add .repoinvariant-baseline.json
+repoinvariant check . --baseline .repoinvariant-baseline.json
+```
+
+`repoinvariant baseline` returns exit code `0` after a successful scan and write even when it
+records blocking findings. A check using that baseline suppresses matching rule/entity/severity
+identities from reports, GitHub annotations, and the exit decision; new identities still behave
+normally. Messages and source locations are evidence, not identity, so moving the same violation
+does not make it new. Resolved entries become non-blocking `stale` entries. Remove them promptly:
+if an identical violation returns while its stale entry remains, it is still accepted.
+
+The baseline is bound to the effective configuration and enabled scanner set. Use the same
+`--config`, `--no-env`, and `--no-features` options for generation and checking. RepoInvariant
+returns exit code `2` on a scope mismatch instead of silently applying an incompatible baseline.
+For the GitHub Action, add the optional input (default: empty):
+
+```yaml
+with:
+  baseline: .repoinvariant-baseline.json
+```
+
+A baseline is a reviewed allowlist, so generate it from a trusted default branch, commit it, and
+protect changes with `CODEOWNERS` or separate approval. Never regenerate it blindly from an
+untrusted pull-request branch. The file stores versioned hashes plus finding codes and severities;
+it does not store variable names, requirement identifiers, messages, or source paths.
+
+Before using `baseline --force`, run a baseline-free `check`, review every current finding, and
+inspect the baseline diff. Regeneration accepts all findings visible in that scan, including newly
+introduced ones.
 
 Then run one of the stable report formats:
 
@@ -199,11 +242,12 @@ RepoInvariant deliberately does not:
 
 Use their native validators alongside RepoInvariant. RepoInvariant owns the gap **between** artifacts.
 
-Configured files and report destinations must stay inside the repository. RepoInvariant rejects
-configuration/output symlinks, limits configuration files to 256 KiB and scanned files to 2 MiB,
-and fails closed on malformed configured YAML. Custom requirement patterns run with a timeout and
-one shared matching-time budget. File reads and atomic report writes use no-follow directory
-descriptors so a concurrent symlink swap cannot redirect them outside the repository.
+Configured files, baselines, and report destinations must stay inside the repository.
+RepoInvariant rejects their symlinks, limits configuration files to 256 KiB and scanned or
+baseline files to 2 MiB, and fails closed on malformed configured YAML or baseline JSON. Custom
+requirement patterns run with a timeout and one shared matching-time budget. File reads and atomic
+writes use no-follow directory descriptors so a concurrent symlink swap cannot redirect them
+outside the repository.
 
 ## Roadmap
 

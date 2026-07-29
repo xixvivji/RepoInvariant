@@ -196,6 +196,44 @@ def test_environment_findings_apply_rule_policy(tmp_path: Path) -> None:
     assert result.findings[0].severity is Severity.WARNING
 
 
+def test_environment_findings_have_stable_internal_baseline_keys(tmp_path: Path) -> None:
+    (tmp_path / ".env.example").write_text(
+        "UNUSED\nCONFLICT=contract-default\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "compose.yml").write_text(
+        "required: ${MISSING}\nconflict: ${CONFLICT:-runtime-default}\n",
+        encoding="utf-8",
+    )
+
+    result = scan_env_contracts(
+        tmp_path,
+        {
+            "contracts": [".env.example"],
+            "compose": ["compose.yml"],
+            "kubernetes": [],
+            "workflows": [],
+            "spring": [],
+        },
+    )
+
+    assert {(finding.code, finding.baseline_key) for finding in result.findings} == {
+        ("ENV001", "MISSING"),
+        ("ENV002", "UNUSED"),
+        ("ENV003", "CONFLICT"),
+    }
+
+    unused = next(finding for finding in result.findings if finding.code == "ENV002")
+    assert unused.as_dict() == {
+        "code": "ENV002",
+        "message": "Contract variable 'UNUSED' is not consumed.",
+        "severity": "warning",
+        "location": {"path": ".env.example", "line": 1, "column": 1},
+        "hint": "Remove the stale declaration or add a matching consumer.",
+    }
+    assert "baseline_key" not in unused.as_dict()
+
+
 def test_cross_checks_all_supported_environment_consumers() -> None:
     root = FIXTURES / "project"
     result = scan_env_contracts(root, _project_config())

@@ -605,6 +605,7 @@ def scan_env_contracts(root: Path, config_mapping: Mapping[str, Any]) -> ScanRes
                 location=locations[0],
                 hint="Declare the variable in an environment contract or explicitly ignore it.",
                 related=tuple(locations[1:]),
+                baseline_key=name,
             )
         )
 
@@ -618,6 +619,7 @@ def scan_env_contracts(root: Path, config_mapping: Mapping[str, Any]) -> ScanRes
                 location=locations[0],
                 hint="Remove the stale declaration or add a matching consumer.",
                 related=tuple(locations[1:]),
+                baseline_key=name,
             )
         )
 
@@ -637,6 +639,7 @@ def scan_env_contracts(root: Path, config_mapping: Mapping[str, Any]) -> ScanRes
                 location=locations[0],
                 hint="Choose one default across the contract and all consumers.",
                 related=tuple(locations[1:]),
+                baseline_key=name,
             )
         )
 

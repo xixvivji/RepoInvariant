@@ -20,7 +20,7 @@ required.
 
 ## Status
 
-RepoInvariant `v0.2.0` is a public alpha. The configuration and finding codes may change
+RepoInvariant `v0.3.0` is a public alpha. The configuration and finding codes may change
 before `v1.0.0`. Pin an exact commit SHA when using the GitHub Action.
 
 ## GitHub Action
@@ -59,6 +59,7 @@ repository contents or require secrets.
 | `config` | empty | Optional repository-relative configuration file. |
 | `format` | `text` | `text`, `json`, `markdown`, or `sarif`. |
 | `output` | empty | Optional repository-relative report path. |
+| `baseline` | empty | Optional repository-relative adoption baseline. |
 | `fail-on` | `error` | Blocking threshold: `error` or `warning`. |
 | `no-env` | `false` | Skip environment-contract checks. |
 | `no-features` | `false` | Skip feature-traceability checks. |
@@ -163,11 +164,7 @@ Each finding code can be set to `error`, `warning`, or `off`. This makes staged 
 start a noisy rule as a warning, reduce the accepted backlog, then promote it to an error. Quote
 `"off"` when editing YAML to avoid YAML 1.1 boolean parsing surprises.
 
-## Adopt an existing repository (unreleased)
-
-Baseline adoption is available on `develop` and is planned for the next release. It is not in the
-PyPI `v0.2.0` package or the pinned `v0.2.0` Action above. Until it is released, run these commands
-from a source checkout with `uv run --frozen`.
+## Adopt an existing repository
 
 ```text
 repoinvariant baseline [path] [--config FILE] [--output FILE] [--force]
@@ -178,9 +175,9 @@ If an established repository already has findings that cannot all be fixed at on
 current set and gate only newly introduced drift:
 
 ```bash
-uv run --frozen repoinvariant baseline .
+repoinvariant baseline .
 git add .repoinvariant-baseline.json
-uv run --frozen repoinvariant check . --baseline .repoinvariant-baseline.json
+repoinvariant check . --baseline .repoinvariant-baseline.json
 ```
 
 `repoinvariant baseline` returns exit code `0` after a successful scan and write even when it
@@ -193,8 +190,7 @@ if an identical violation returns while its stale entry remains, it is still acc
 The baseline is bound to the effective configuration and enabled scanner set. Use the same
 `--config`, `--no-env`, and `--no-features` options for generation and checking. RepoInvariant
 returns exit code `2` on a scope mismatch instead of silently applying an incompatible baseline.
-The next Action release will add a `baseline` input; the pinned `v0.2.0` Action does not support it.
-After that release, pin its published commit SHA and add the optional input (default: empty):
+For the GitHub Action, add the optional input (default: empty):
 
 ```yaml
 with:

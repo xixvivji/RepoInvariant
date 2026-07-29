@@ -4,6 +4,8 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-29
+
 ### Added
 
 - Privacy-preserving adoption baselines that snapshot existing findings and gate only new drift.
@@ -11,7 +13,7 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ### Changed
 
-- Updated the documented stable Action pin to the exact `v0.2.0` release commit.
+- Updated the documented stable Action pin to an immutable `v0.3.0` release source commit.
 
 ### Security
 

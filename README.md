@@ -1,6 +1,6 @@
 # RepoInvariant
 
-> Pre-alpha: catch contract drift across repository artifacts before merge.
+> Alpha: catch contract drift across repository artifacts before merge.
 
 RepoInvariant is a deterministic CLI and GitHub Action that checks whether the contracts spread
 across your repository still agree. It focuses on two expensive, repeatable failure modes:
@@ -14,17 +14,15 @@ required.
 
 ## Status
 
-RepoInvariant is under active pre-alpha development. The configuration and finding codes may change
-before `v0.1.0`. Pin a commit SHA when trying the GitHub Action.
+RepoInvariant `v0.1.0` is the first public alpha. The configuration and finding codes may change
+before `v1.0.0`. Pin an exact commit SHA when using the GitHub Action.
 
 ## Quick start
 
-Install from a local checkout:
+Install the CLI from PyPI:
 
 ```bash
-git clone https://github.com/xixvivji/RepoInvariant.git
-cd RepoInvariant
-uv tool install .
+uv tool install repoinvariant
 
 cd /path/to/your/repository
 repoinvariant init
@@ -110,15 +108,15 @@ the command or configuration was invalid. Add `--fail-on warning` for a stricter
 
 ## GitHub Action
 
-The repository must be checked out before RepoInvariant runs. Until the first stable tag, pin an
-exact commit SHA:
+The repository must be checked out before RepoInvariant runs. For supply-chain safety, pin an exact
+commit SHA:
 
 ```yaml
 permissions:
   contents: read
 
 steps:
-  - uses: actions/checkout@v4
+  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
   - uses: xixvivji/RepoInvariant@<commit-sha>
     with:
       path: .
@@ -171,10 +169,10 @@ descriptors so a concurrent symlink swap cannot redirect them outside the reposi
 - [x] Composite GitHub Action
 - [ ] Version-baseline contracts across Gradle, Docker, CI, and documentation
 - [ ] Reusable parser plugin API
-- [ ] PyPI trusted publishing and signed releases
+- [x] PyPI trusted publishing and provenance-attested release automation
 - [ ] Real-world compatibility fixtures from external projects
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) to help shape `v0.1.0`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) to help shape future releases.
 
 ## License
 

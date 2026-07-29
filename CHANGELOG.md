@@ -1,9 +1,10 @@
 # Changelog
 
-All notable changes will be documented in this file. The project follows Semantic Versioning once
-it reaches `v0.1.0`.
+All notable changes will be documented in this file. The project follows Semantic Versioning.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-07-29
 
 ### Added
 

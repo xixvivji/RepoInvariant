@@ -11,6 +11,6 @@
   "scope_digest": "sha256:2e0c978d3c946f8a4eaa560b86e6292bbc5acd28c5f9870af96f6813cc5224d8",
   "tool": {
     "name": "RepoInvariant",
-    "version": "0.2.0"
+    "version": "0.3.0"
   }
 }

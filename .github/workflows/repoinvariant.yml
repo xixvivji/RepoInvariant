@@ -66,6 +66,29 @@ jobs:
           [[ "$REPOINVARIANT_ERRORS" == 0 ]]
           [[ "$REPOINVARIANT_WARNINGS" == 1 ]]
           [[ -z "$REPOINVARIANT_REPORT_PATH" ]]
+      - name: Exercise baseline suppression
+        id: baseline_fixture
+        uses: ./
+        with:
+          path: tests/fixtures/action-warning
+          baseline: .repoinvariant-baseline.json
+          fail-on: warning
+          no-features: "true"
+      - name: Verify baseline-filtered outputs
+        shell: bash
+        env:
+          REPOINVARIANT_OUTCOME: ${{ steps.baseline_fixture.outcome }}
+          REPOINVARIANT_STATUS: ${{ steps.baseline_fixture.outputs.status }}
+          REPOINVARIANT_ERRORS: ${{ steps.baseline_fixture.outputs.errors }}
+          REPOINVARIANT_WARNINGS: ${{ steps.baseline_fixture.outputs.warnings }}
+          REPOINVARIANT_REPORT_PATH: ${{ steps.baseline_fixture.outputs.report-path }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$REPOINVARIANT_OUTCOME" == success ]]
+          [[ "$REPOINVARIANT_STATUS" == pass ]]
+          [[ "$REPOINVARIANT_ERRORS" == 0 ]]
+          [[ "$REPOINVARIANT_WARNINGS" == 0 ]]
+          [[ -z "$REPOINVARIANT_REPORT_PATH" ]]
       - name: Upload RepoInvariant SARIF report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()

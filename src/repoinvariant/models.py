@@ -38,6 +38,12 @@ class Finding:
     location: Location | None = None
     hint: str | None = None
     related: tuple[Location, ...] = ()
+    baseline_key: str | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+        kw_only=True,
+    )
 
     def as_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {

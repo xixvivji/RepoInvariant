@@ -1,0 +1,16 @@
+{
+  "findings": [
+    {
+      "code": "ENV002",
+      "fingerprint": "sha256:56bc5123233603e4277e6d2721e7142fa48ed98ab85b7742b04b5c43e9ea6cdf",
+      "severity": "warning"
+    }
+  ],
+  "fingerprint_version": 1,
+  "schema_version": 1,
+  "scope_digest": "sha256:2e0c978d3c946f8a4eaa560b86e6292bbc5acd28c5f9870af96f6813cc5224d8",
+  "tool": {
+    "name": "RepoInvariant",
+    "version": "0.2.0"
+  }
+}

@@ -23,6 +23,10 @@ inputs:
     description: Optional report output path.
     required: false
     default: ""
+  baseline:
+    description: Optional repository-relative baseline file for gradual adoption.
+    required: false
+    default: ""
   fail-on:
     description: Minimum blocking severity (error or warning).
     required: false
@@ -38,13 +42,13 @@ inputs:
 
 outputs:
   status:
-    description: Scan result after applying fail-on (pass or fail).
+    description: Scan result after baseline filtering and fail-on (pass or fail).
     value: ${{ steps.check.outputs.status }}
   errors:
-    description: Total number of error findings.
+    description: Number of reported (unsuppressed) error findings.
     value: ${{ steps.check.outputs.errors }}
   warnings:
-    description: Total number of warning findings.
+    description: Number of reported (unsuppressed) warning findings.
     value: ${{ steps.check.outputs.warnings }}
   report-path:
     description: Safe workspace-relative report path, or empty when unavailable.
@@ -76,6 +80,7 @@ runs:
         REPOINVARIANT_CONFIG: ${{ inputs.config }}
         REPOINVARIANT_FORMAT: ${{ inputs.format }}
         REPOINVARIANT_OUTPUT: ${{ inputs.output }}
+        REPOINVARIANT_BASELINE: ${{ inputs.baseline }}
         REPOINVARIANT_FAIL_ON: ${{ inputs.fail-on }}
         REPOINVARIANT_NO_ENV: ${{ inputs.no-env }}
         REPOINVARIANT_NO_FEATURES: ${{ inputs.no-features }}
@@ -89,6 +94,9 @@ runs:
         fi
         if [[ -n "$REPOINVARIANT_OUTPUT" ]]; then
           args+=("--output=$REPOINVARIANT_OUTPUT")
+        fi
+        if [[ -n "$REPOINVARIANT_BASELINE" ]]; then
+          args+=("--baseline=$REPOINVARIANT_BASELINE")
         fi
 
         case "$REPOINVARIANT_NO_ENV" in

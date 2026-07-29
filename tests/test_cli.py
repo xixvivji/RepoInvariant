@@ -4,6 +4,14 @@ from pathlib import Path
 from repoinvariant.cli import main
 
 
+def _write_baseline_fixture(root: Path) -> None:
+    (root / ".env.example").write_text("DECLARED=\n", encoding="utf-8")
+    (root / "compose.yml").write_text(
+        "services:\n  api:\n    environment:\n      REQUIRED: ${REQUIRED}\n",
+        encoding="utf-8",
+    )
+
+
 def test_init_creates_config_and_refuses_to_overwrite(tmp_path: Path, capsys) -> None:
     assert main(["init", str(tmp_path)]) == 0
     config = tmp_path / ".repoinvariant.yml"
@@ -82,9 +90,175 @@ def test_check_accepts_option_like_repository_path(tmp_path: Path, capsys) -> No
     assert json.loads(capsys.readouterr().out)["ok"] is True
 
 
+def test_baseline_accepts_option_like_repository_path(tmp_path: Path, capsys) -> None:
+    root = tmp_path / "--help"
+    root.mkdir()
+
+    assert main(["baseline", "--no-env", "--no-features", "--", str(root)]) == 0
+    assert (root / ".repoinvariant-baseline.json").is_file()
+    assert "0 accepted finding(s)" in capsys.readouterr().out
+
+
 def test_check_fails_for_explicit_missing_config(tmp_path: Path, capsys) -> None:
     assert main(["check", str(tmp_path), "--config", "missing.yml"]) == 2
     assert "configuration file does not exist" in capsys.readouterr().err
+
+
+def test_check_without_baseline_keeps_original_streams_and_exit_code(
+    tmp_path: Path, capsys
+) -> None:
+    assert main(["check", str(tmp_path)]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == "PASS: 0 files, 0 errors, 0 warnings\n"
+    assert captured.err == ""
+
+
+def test_baseline_snapshots_drift_and_check_reports_only_new_findings(
+    tmp_path: Path, capsys
+) -> None:
+    _write_baseline_fixture(tmp_path)
+
+    assert main(["baseline", str(tmp_path)]) == 0
+    creation = capsys.readouterr()
+    assert "2 accepted finding(s)" in creation.out
+    assert "trusted base branch" in creation.err
+    assert "review every baseline change" in creation.err
+    baseline_path = tmp_path / ".repoinvariant-baseline.json"
+    baseline_text = baseline_path.read_text(encoding="utf-8")
+    assert "REQUIRED" not in baseline_text
+    assert "DECLARED" not in baseline_text
+
+    assert main(["check", str(tmp_path), "--baseline", baseline_path.name]) == 0
+    captured = capsys.readouterr()
+    assert "PASS:" in captured.out
+    assert "2 suppressed, 0 stale" in captured.err
+
+    (tmp_path / "compose.yml").write_text(
+        "services:\n  api:\n    environment:\n"
+        "      REQUIRED: ${REQUIRED}\n      ADDED: ${ADDED}\n",
+        encoding="utf-8",
+    )
+    assert (
+        main(
+            [
+                "check",
+                str(tmp_path),
+                "--baseline",
+                baseline_path.name,
+                "--format",
+                "json",
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert [(finding["code"], finding["message"]) for finding in payload["findings"]] == [
+        ("ENV001", "Environment variable 'ADDED' is consumed but missing from the contract.")
+    ]
+    assert "2 suppressed, 0 stale" in captured.err
+
+
+def test_baseline_stale_entries_are_nonblocking(tmp_path: Path, capsys) -> None:
+    _write_baseline_fixture(tmp_path)
+    assert main(["baseline", str(tmp_path)]) == 0
+    capsys.readouterr()
+
+    (tmp_path / ".env.example").write_text("", encoding="utf-8")
+    (tmp_path / "compose.yml").write_text("services: {}\n", encoding="utf-8")
+
+    assert main(["check", str(tmp_path), "--baseline", ".repoinvariant-baseline.json"]) == 0
+    captured = capsys.readouterr()
+    assert "0 suppressed, 2 stale" in captured.err
+    assert "regenerate the baseline" in captured.err
+
+
+def test_baseline_refuses_overwrite_without_force_and_config_collision(
+    tmp_path: Path, capsys
+) -> None:
+    _write_baseline_fixture(tmp_path)
+    assert main(["baseline", str(tmp_path)]) == 0
+    baseline_path = tmp_path / ".repoinvariant-baseline.json"
+    original = baseline_path.read_text(encoding="utf-8")
+    capsys.readouterr()
+
+    assert main(["baseline", str(tmp_path)]) == 2
+    assert baseline_path.read_text(encoding="utf-8") == original
+    assert "use --force" in capsys.readouterr().err
+
+    assert main(["baseline", str(tmp_path), "--force"]) == 0
+    assert main(["baseline", str(tmp_path), "--output", ".repoinvariant.yml"]) == 2
+    assert "must be different paths" in capsys.readouterr().err
+    assert main(["baseline", str(tmp_path), "--output", ".REPOINVARIANT.YML"]) == 2
+    assert "must be different paths" in capsys.readouterr().err
+
+
+def test_check_refuses_to_overwrite_its_baseline_with_report(
+    tmp_path: Path, capsys
+) -> None:
+    _write_baseline_fixture(tmp_path)
+    assert main(["baseline", str(tmp_path)]) == 0
+    baseline_path = tmp_path / ".repoinvariant-baseline.json"
+    original = baseline_path.read_text(encoding="utf-8")
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "check",
+                str(tmp_path),
+                "--baseline",
+                baseline_path.name,
+                "--output",
+                baseline_path.name,
+            ]
+        )
+        == 2
+    )
+    assert baseline_path.read_text(encoding="utf-8") == original
+    assert "must be different paths" in capsys.readouterr().err
+
+
+def test_check_baseline_input_errors_return_two(tmp_path: Path, capsys) -> None:
+    assert main(["check", str(tmp_path), "--baseline", "missing.json"]) == 2
+    assert "cannot read baseline" in capsys.readouterr().err
+
+    baseline_path = tmp_path / ".repoinvariant-baseline.json"
+    baseline_path.write_text("{}\n", encoding="utf-8")
+    assert main(["check", str(tmp_path), "--baseline", baseline_path.name]) == 2
+    assert "missing key" in capsys.readouterr().err
+
+    assert main(["baseline", str(tmp_path), "--force"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "check",
+                str(tmp_path),
+                "--baseline",
+                baseline_path.name,
+                "--no-features",
+            ]
+        )
+        == 2
+    )
+    assert "scope does not match" in capsys.readouterr().err
+
+    assert (
+        main(
+            [
+                "check",
+                str(tmp_path),
+                "--config",
+                ".repoinvariant.yml",
+                "--baseline",
+                ".repoinvariant.yml",
+            ]
+        )
+        == 2
+    )
+    assert "must be different paths" in capsys.readouterr().err
 
 
 def test_warning_failure_policy_matches_json_report(tmp_path: Path, capsys) -> None:
@@ -126,6 +300,27 @@ def test_output_and_force_init_refuse_symlinks(tmp_path: Path, capsys) -> None:
     assert output_target.read_text(encoding="utf-8") == "do not replace\n"
     assert "symbolic link" in capsys.readouterr().err
 
+    baseline_target = tmp_path / "outside-baseline.json"
+    baseline_target.write_text("do not replace\n", encoding="utf-8")
+    (root / "baseline.json").symlink_to(baseline_target)
+
+    assert (
+        main(
+            [
+                "baseline",
+                str(root),
+                "--output",
+                "baseline.json",
+                "--force",
+                "--no-env",
+                "--no-features",
+            ]
+        )
+        == 2
+    )
+    assert baseline_target.read_text(encoding="utf-8") == "do not replace\n"
+    assert "symbolic link" in capsys.readouterr().err
+
 
 def test_github_actions_feedback_keeps_json_separate_from_commands(
     tmp_path: Path, monkeypatch, capsys
@@ -151,6 +346,56 @@ def test_github_actions_feedback_keeps_json_separate_from_commands(
     assert "\npass\n" in outputs
     assert "report-path<<" in outputs
     assert "# RepoInvariant report" in step_summary.read_text(encoding="utf-8")
+
+
+def test_github_actions_baseline_feedback_and_outputs_include_only_new_findings(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    _write_baseline_fixture(tmp_path)
+    assert main(["baseline", str(tmp_path)]) == 0
+    capsys.readouterr()
+    (tmp_path / "compose.yml").write_text(
+        "services:\n  api:\n    environment:\n"
+        "      REQUIRED: ${REQUIRED}\n      ADDED: ${ADDED}\n",
+        encoding="utf-8",
+    )
+    github_output = tmp_path / "github-output"
+    step_summary = tmp_path / "step-summary"
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
+
+    assert (
+        main(
+            [
+                "check",
+                str(tmp_path),
+                "--baseline",
+                ".repoinvariant-baseline.json",
+                "--format",
+                "json",
+                "--github-actions",
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+    assert [finding["message"] for finding in payload["findings"]] == [
+        "Environment variable 'ADDED' is consumed but missing from the contract."
+    ]
+    assert "::notice title=RepoInvariant baseline::2 suppressed, 0 stale." in captured.out
+    assert "::error" in captured.out
+    assert "ADDED" in captured.out
+    assert "REQUIRED" not in captured.out
+    outputs = github_output.read_text(encoding="utf-8")
+    assert "\n1\n" in outputs
+    assert "\n0\n" in outputs
+    assert "\nfail\n" in outputs
+    summary = step_summary.read_text(encoding="utf-8")
+    assert "ADDED" in summary
+    assert "REQUIRED" not in summary
 
 
 def test_github_actions_feedback_file_error_returns_two(

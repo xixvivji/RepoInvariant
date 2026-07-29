@@ -124,8 +124,15 @@ def read_limited_text(
         os.close(parent_descriptor)
 
 
-def atomic_write_text(root: Path, destination: Path, text: str, *, label: str) -> Path:
-    """Atomically replace a regular file through a verified parent directory descriptor."""
+def atomic_write_text(
+    root: Path,
+    destination: Path,
+    text: str,
+    *,
+    label: str,
+    overwrite: bool = True,
+) -> Path:
+    """Atomically create or replace a file through a verified parent descriptor."""
 
     encoded = text.encode("utf-8")
     resolved_root, relative = _repository_relative(root, destination, label=label)
@@ -138,6 +145,8 @@ def atomic_write_text(root: Path, destination: Path, text: str, *, label: str) -
         except FileNotFoundError:
             existing = None
         if existing is not None:
+            if not overwrite:
+                raise ValueError(f"{label} already exists: {destination}")
             if stat.S_ISLNK(existing.st_mode):
                 raise ValueError(f"{label} must not be a symbolic link: {destination}")
             if not stat.S_ISREG(existing.st_mode):
@@ -167,12 +176,25 @@ def atomic_write_text(root: Path, destination: Path, text: str, *, label: str) -
         os.fsync(temporary_descriptor)
         os.close(temporary_descriptor)
         temporary_descriptor = None
-        os.replace(
-            temporary_name,
-            relative.name,
-            src_dir_fd=parent_descriptor,
-            dst_dir_fd=parent_descriptor,
-        )
+        if overwrite:
+            os.replace(
+                temporary_name,
+                relative.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+        else:
+            try:
+                os.link(
+                    temporary_name,
+                    relative.name,
+                    src_dir_fd=parent_descriptor,
+                    dst_dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileExistsError as exc:
+                raise ValueError(f"{label} already exists: {destination}") from exc
+            os.unlink(temporary_name, dir_fd=parent_descriptor)
         temporary_name = None
         os.fsync(parent_descriptor)
     finally:

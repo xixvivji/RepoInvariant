@@ -34,7 +34,7 @@ repotruth check .
 During development, use:
 
 ```bash
-uv sync --extra dev
+uv sync --frozen --extra dev
 uv run repotruth check examples/ticket-service
 uv run pytest
 ```
@@ -70,8 +70,31 @@ features:
   tests: [tests/**/*, src/test/**/*]
   id_pattern: '\bREQ-[A-Z0-9][A-Z0-9-]*\b'
   openapi_extension: x-feature-id
+  requirements_mode: definitions
   ignore: []
+
+rules:
+  ENV001: error
+  ENV002: warning
+  ENV003: warning
+  TRACE001: error
+  TRACE002: error
+  TRACE003: error
+  TRACE004: warning
 ```
+
+`requirements_mode: definitions` counts IDs only when they look like canonical Markdown
+definitions (headings, definition lists, and the first column of tables). Set it to `mentions` for
+legacy repositories where any prose reference is authoritative.
+
+The built-in `REQ-*` pattern is printed verbatim because it is a constrained public identifier
+format. Matches from a custom `id_pattern` are reported as deterministic `custom-id-N` labels;
+source locations remain exact, but arbitrary matched repository text never reaches logs or report
+artifacts.
+
+Each finding code can be set to `error`, `warning`, or `off`. This makes staged adoption explicit:
+start a noisy rule as a warning, fix the baseline, then promote it to an error. Quote `"off"` when
+editing YAML to avoid YAML 1.1 boolean parsing surprises.
 
 Then run one of the stable report formats:
 
@@ -101,10 +124,14 @@ steps:
       path: .
       format: sarif
       output: repotruth-report.sarif
+      no-features: "true" # optional during staged adoption
 ```
 
 The action installs only the source bundled with the pinned action revision. It does not transmit
 repository contents.
+
+The action also accepts `no-env` and `no-features` boolean inputs. Prefer rule-level severity
+configuration when only one check needs a temporary downgrade.
 
 ## Finding codes
 
@@ -130,6 +157,12 @@ RepoTruth deliberately does not:
 
 Use their native validators alongside RepoTruth. RepoTruth owns the gap **between** artifacts.
 
+Configured files and report destinations must stay inside the repository. RepoTruth rejects
+configuration/output symlinks, limits configuration files to 256 KiB and scanned files to 2 MiB,
+and fails closed on malformed configured YAML. Custom requirement patterns run with a timeout and
+one shared matching-time budget. File reads and atomic report writes use no-follow directory
+descriptors so a concurrent symlink swap cannot redirect them outside the repository.
+
 ## Roadmap
 
 - [x] Environment contract checks
@@ -146,4 +179,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) to help shape `v0.1.0`.
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
-

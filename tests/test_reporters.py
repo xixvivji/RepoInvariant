@@ -37,6 +37,8 @@ def test_json_report_is_machine_readable(tmp_path: Path) -> None:
     payload = json.loads(render_json(_result(), tmp_path))
 
     assert payload["ok"] is False
+    assert payload["schema_version"] == 1
+    assert payload["exit_code"] == 1
     assert payload["summary"] == {"errors": 1, "files": 2, "notes": 0, "warnings": 1}
     assert payload["findings"][0]["location"]["path"] == "compose.yml"
 
@@ -61,3 +63,44 @@ def test_sarif_report_contains_rule_and_region(tmp_path: Path) -> None:
     assert run["tool"]["driver"]["name"] == "RepoTruth"
     assert run["results"][0]["ruleId"] == "ENV001"
     assert run["results"][0]["locations"][0]["physicalLocation"]["region"]["startLine"] == 7
+
+
+def test_warning_threshold_is_reflected_in_all_status_reports(tmp_path: Path) -> None:
+    result = ScanResult(
+        findings=[Finding("ENV002", "unused", Severity.WARNING)],
+        scanned_files={Path(".env.example")},
+    )
+
+    assert render_text(result, tmp_path, Severity.WARNING).startswith(
+        ".: warning ENV002: unused"
+    )
+    assert render_text(result, tmp_path, Severity.WARNING).endswith(
+        "FAIL: 1 files, 0 errors, 1 warnings\n"
+    )
+    assert json.loads(render_json(result, tmp_path, Severity.WARNING))["ok"] is False
+    assert "❌ Fail" in render_markdown(result, tmp_path, Severity.WARNING)
+
+
+def test_human_reports_escape_control_characters_and_sarif_quotes_uri(tmp_path: Path) -> None:
+    result = ScanResult(
+        findings=[
+            Finding(
+                "ENV001",
+                "safe\nmessage",
+                Severity.ERROR,
+                Location(Path("::warning\nfile #1.yml"), 1, 1),
+            )
+        ]
+    )
+
+    text = render_text(result, tmp_path)
+    markdown = render_markdown(result, tmp_path)
+    sarif = json.loads(render_sarif(result, tmp_path))
+
+    assert "./::warning\\x0afile #1.yml" in text
+    assert "safe\\x0amessage" in text
+    assert "\\x0a" in markdown
+    uri = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"][
+        "artifactLocation"
+    ]["uri"]
+    assert uri == "%3A%3Awarning%0Afile%20%231.yml"

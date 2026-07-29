@@ -154,3 +154,157 @@ def test_ignore_hidden_venv_configured_and_binary_files(tmp_path: Path) -> None:
 def test_invalid_id_pattern_has_a_clear_error(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Invalid traceability id_pattern"):
         scan_traceability(tmp_path, _config(id_pattern="["))
+
+
+def test_prose_mentions_do_not_define_requirements_by_default(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "spec").mkdir()
+    (tmp_path / "checks").mkdir()
+    (tmp_path / "docs" / "requirements.md").write_text(
+        "REQ-PROSE is only mentioned here.\n", encoding="utf-8"
+    )
+    (tmp_path / "spec" / "api.yaml").write_text(
+        "x-feature-id: REQ-PROSE\n", encoding="utf-8"
+    )
+    (tmp_path / "checks" / "test.txt").write_text("REQ-PROSE\n", encoding="utf-8")
+
+    definitions = scan_traceability(
+        tmp_path,
+        _config(requirements="docs/*", specifications="spec/*", tests="checks/*"),
+    )
+    mentions = scan_traceability(
+        tmp_path,
+        _config(
+            requirements="docs/*",
+            specifications="spec/*",
+            tests="checks/*",
+            requirements_mode="mentions",
+        ),
+    )
+
+    assert [finding.code for finding in definitions.findings] == ["TRACE002"]
+    assert mentions.findings == []
+
+
+def test_rule_policy_can_downgrade_or_disable_findings(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "requirements.md").write_text(
+        "# REQ-ONE: Missing spec\n", encoding="utf-8"
+    )
+    config = _config(requirements="docs/*", specifications=[], tests=[])
+    config["rules"] = {"TRACE001": "warning"}
+
+    downgraded = scan_traceability(tmp_path, config)
+    config["rules"] = {"TRACE001": "off"}
+    disabled = scan_traceability(tmp_path, config)
+
+    assert downgraded.findings[0].severity is Severity.WARNING
+    assert disabled.findings == []
+
+
+def test_malformed_specification_fails_closed(tmp_path: Path) -> None:
+    (tmp_path / "spec").mkdir()
+    (tmp_path / "spec" / "api.yaml").write_text("paths: [\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid YAML/JSON specification"):
+        scan_traceability(tmp_path, _config(requirements=[], specifications="spec/*", tests=[]))
+
+
+def test_recursive_yaml_alias_does_not_recurse_forever(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "spec").mkdir()
+    (tmp_path / "checks").mkdir()
+    (tmp_path / "docs" / "requirements.md").write_text(
+        "# REQ-ONE: Defined\n", encoding="utf-8"
+    )
+    (tmp_path / "spec" / "api.yaml").write_text(
+        "x-feature-id: &ids [REQ-ONE, *ids]\n", encoding="utf-8"
+    )
+    (tmp_path / "checks" / "test.txt").write_text("REQ-ONE\n", encoding="utf-8")
+
+    result = scan_traceability(
+        tmp_path,
+        _config(requirements="docs/*", specifications="spec/*", tests="checks/*"),
+    )
+
+    assert result.findings == []
+
+
+def test_custom_pattern_cannot_emit_secret_shaped_matches(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    secret = "SECRET=do-not-print-this-value"
+    (tmp_path / "docs" / "requirements.md").write_text(f"# {secret}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unsafe identifier") as error:
+        scan_traceability(
+            tmp_path,
+            _config(requirements="docs/*", specifications=[], tests=[], id_pattern=r"SECRET=[^ ]+"),
+        )
+
+    assert "do-not-print" not in str(error.value)
+
+
+def test_pathological_custom_pattern_times_out(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "requirements.md").write_text(
+        "a" * 100_000 + "!\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="matching timed out"):
+        scan_traceability(
+            tmp_path,
+            _config(requirements="docs/*", specifications=[], tests=[], id_pattern=r"(a+)+$"),
+        )
+
+
+def test_custom_identifiers_are_opaque_in_findings(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    canary = "SYNTHETIC-SECRET-CANARY-7391"
+    (tmp_path / "docs" / "requirements.md").write_text(f"# {canary}: Example\n", encoding="utf-8")
+
+    result = scan_traceability(
+        tmp_path,
+        _config(
+            requirements="docs/*",
+            specifications=[],
+            tests=[],
+            id_pattern=r"SYNTHETIC-[A-Z0-9-]+",
+        ),
+    )
+
+    payload = repr([finding.as_dict() for finding in result.findings])
+    assert canary not in payload
+    assert "custom-id-1" in payload
+
+
+def test_matching_budget_is_shared_across_lines(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    attack_line = "a" * 200 + "!\n"
+    (tmp_path / "docs" / "requirements.md").write_text(
+        attack_line * 1_000, encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="matching time budget|matching timed out"):
+        scan_traceability(
+            tmp_path,
+            _config(requirements="docs/*", specifications=[], tests=[], id_pattern=r"(a+)+$"),
+        )
+
+
+def test_invalid_utf8_specification_and_configured_symlink_are_rejected(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "spec").mkdir()
+    invalid = tmp_path / "spec" / "invalid.yaml"
+    invalid.write_bytes(b"x-feature-id: \xff\n")
+
+    with pytest.raises(ValueError, match="Invalid UTF-8"):
+        scan_traceability(tmp_path, _config(requirements=[], specifications="spec/*", tests=[]))
+
+    invalid.unlink()
+    target = tmp_path / "real.yaml"
+    target.write_text("x-feature-id: REQ-ONE\n", encoding="utf-8")
+    (tmp_path / "spec" / "linked.yaml").symlink_to(target)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        scan_traceability(tmp_path, _config(requirements=[], specifications="spec/*", tests=[]))

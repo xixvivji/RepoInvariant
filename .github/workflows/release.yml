@@ -1,0 +1,188 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Validate and build distributions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.0"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Sync locked dependencies
+        run: uv sync --frozen --extra dev
+      - name: Verify tag matches package version
+        if: github.event_name == 'push'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          from repotruth import __version__
+
+          expected_tag = f"v{__version__}"
+          actual_tag = os.environ["RELEASE_TAG"]
+          if actual_tag != expected_tag:
+              raise SystemExit(f"tag {actual_tag!r} does not match {expected_tag!r}")
+          PY
+      - name: Lint
+        run: uv run --frozen ruff check .
+      - name: Test
+        run: uv run --frozen pytest --cov=repotruth --cov-report=term-missing --cov-fail-under=85
+      - name: Dogfood
+        run: uv run --frozen repotruth check . --fail-on warning
+      - name: Build source distribution and wheel from the source distribution
+        run: uv build --no-build-isolation --out-dir dist
+      - name: Validate distribution metadata
+        run: uv run --frozen twine check --strict dist/*
+      - name: Smoke-test the built wheel
+        run: |
+          uv venv "$RUNNER_TEMP/repotruth-smoke"
+          uv pip install --python "$RUNNER_TEMP/repotruth-smoke/bin/python" dist/*.whl
+          "$RUNNER_TEMP/repotruth-smoke/bin/repotruth" --version
+      - name: Upload distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-package-distributions
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  attest:
+    name: Attest distributions
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Attest build provenance
+        id: provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+      - name: Upload provenance bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-provenance
+          path: ${{ steps.provenance.outputs.bundle-path }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-pypi:
+    name: Publish to PyPI
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/repotruth
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Publish distributions with Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        with:
+          packages-dir: dist/
+          verify-metadata: "true"
+          attestations: "true"
+          verbose: "false"
+          print-hash: "true"
+
+  github-release:
+    name: Create GitHub release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [publish-pypi, attest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Download provenance bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: build-provenance
+          path: provenance/
+      - name: Create checksums and publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+
+          mapfile -t distributions < <(
+            find dist -maxdepth 1 -type f \( -name '*.whl' -o -name '*.tar.gz' \) -print | sort
+          )
+          mapfile -t provenance_bundles < <(find provenance -type f -print | sort)
+          if (( ${#distributions[@]} == 0 || ${#provenance_bundles[@]} == 0 )); then
+            echo "release distributions or provenance bundle are missing" >&2
+            exit 1
+          fi
+
+          : > SHA256SUMS
+          for artifact in "${distributions[@]}"; do
+            digest="$(sha256sum "$artifact" | cut -d ' ' -f 1)"
+            printf '%s  %s\n' "$digest" "$(basename "$artifact")" >> SHA256SUMS
+          done
+
+          assets=("${distributions[@]}" SHA256SUMS "${provenance_bundles[@]}")
+          release_flags=(
+            --repo "$GITHUB_REPOSITORY"
+            --verify-tag
+            --generate-notes
+            --title "RepoTruth $RELEASE_TAG"
+            --draft
+          )
+          if [[ "$RELEASE_TAG" =~ (a|b|rc|dev)[0-9] ]]; then
+            release_flags+=(--prerelease)
+          fi
+
+          gh release create "$RELEASE_TAG" "${assets[@]}" "${release_flags[@]}"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false

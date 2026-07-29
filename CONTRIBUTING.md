@@ -9,11 +9,17 @@ RepoTruth requires Python 3.11 or newer and uses `uv` for the contributor workfl
 ```bash
 git clone https://github.com/xixvivji/RepoTruth.git
 cd RepoTruth
-uv sync --extra dev
+uv sync --frozen --extra dev
 uv run pytest
 uv run ruff check .
-uv run python -m build
+uv build --no-build-isolation
 ```
+
+## Branching
+
+The project uses [Git Flow](docs/branching.md). Create `feature/*` branches from `develop` and open
+feature pull requests back into `develop`. Only reviewed `release/*` and `hotfix/*` work reaches
+`main`; do not commit directly to either long-lived branch.
 
 ## Before opening a pull request
 
@@ -28,4 +34,3 @@ clearly scoped unsupported case. Please avoid semantic or AI-based matching in t
 core without first discussing the threat model and reproducibility trade-offs in an issue.
 
 By submitting a contribution, you agree that it is licensed under Apache-2.0.
-

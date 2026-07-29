@@ -12,7 +12,8 @@ body:
     id: version
     attributes:
       label: RepoInvariant version
-      placeholder: "0.1.0 or commit SHA"
+      description: Paste `repoinvariant --version` output or an exact Action commit SHA.
+      placeholder: "repoinvariant X.Y.Z or an exact commit SHA"
     validations:
       required: true
   - type: dropdown

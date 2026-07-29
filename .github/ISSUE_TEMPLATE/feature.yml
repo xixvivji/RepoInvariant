@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a deterministic cross-artifact contract check or integration.
+title: "feature: "
+labels: [enhancement, needs-triage]
+body:
+  - type: textarea
+    id: drift
+    attributes:
+      label: Which artifacts drift?
+      description: Name the two or more repository artifacts whose contract can disagree.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Deterministic evidence
+      description: Explain the exact identifiers or values RepoInvariant could compare without AI.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Minimal synthetic example
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Existing tools or workarounds

@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import re
+import time
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import regex
 import yaml
 from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
-from repotruth.models import Finding, Location, ScanResult, Severity
+from repoinvariant.filesystem import MAX_SCAN_FILES, read_limited_text
+from repoinvariant.models import Finding, Location, ScanResult, Severity
+from repoinvariant.policy import apply_rule_policy
 
 DEFAULT_ID_PATTERN = r"\bREQ-[A-Z0-9][A-Z0-9-]*\b"
 DEFAULT_OPENAPI_EXTENSION = "x-feature-id"
@@ -37,6 +41,36 @@ _FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}(?:\s+|$)")
 _LIST_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+")
 _SETEXT_RE = re.compile(r"^\s{0,3}(?:=+|-+)\s*$")
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{1,127}$", re.ASCII)
+_MAX_MATCHES_PER_VALUE = 10_000
+_MATCH_TIMEOUT_SECONDS = 0.05
+_TOTAL_MATCH_BUDGET_SECONDS = 1.0
+_MAX_TOTAL_MATCHES = 100_000
+_MAX_YAML_DEPTH = 128
+_MAX_YAML_NODES = 20_000
+
+
+class _TraceFileError(ValueError):
+    """Raised for an unsafe file matched by an otherwise valid pattern."""
+
+
+class _MatchBudget:
+    __slots__ = ("deadline", "matches")
+
+    def __init__(self) -> None:
+        self.deadline = time.monotonic() + _TOTAL_MATCH_BUDGET_SECONDS
+        self.matches = 0
+
+    def remaining(self) -> float:
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("Traceability id_pattern exceeded the total matching time budget")
+        return min(_MATCH_TIMEOUT_SECONDS, remaining)
+
+    def record_match(self) -> None:
+        self.matches += 1
+        if self.matches > _MAX_TOTAL_MATCHES:
+            raise ValueError("Traceability id_pattern produced too many total matches")
 
 
 def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResult:
@@ -53,13 +87,16 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
         return result
 
     try:
-        id_pattern = re.compile(str(features.get("id_pattern", DEFAULT_ID_PATTERN)))
-    except re.error as error:
+        pattern_source = str(features.get("id_pattern", DEFAULT_ID_PATTERN))
+        id_pattern = regex.compile(pattern_source)
+    except regex.error as error:
         raise ValueError(f"Invalid traceability id_pattern: {error}") from error
 
     extension = str(features.get("openapi_extension", DEFAULT_OPENAPI_EXTENSION))
+    requirements_mode = str(features.get("requirements_mode", "definitions"))
     ignore = _as_patterns(features.get("ignore", ()))
     text_cache: dict[Path, str | None] = {}
+    match_budget = _MatchBudget()
 
     requirement_paths = _glob_files(root, features.get("requirements"), ignore)
     specification_paths = _glob_files(root, features.get("specifications"), ignore)
@@ -70,30 +107,36 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
     tested_ids: set[str] = set()
 
     for path in requirement_paths:
-        text = _read_text(path, text_cache)
+        text = _read_text(root, path, text_cache)
         if text is None:
             continue
         relative = path.relative_to(root)
         result.scanned_files.add(relative)
-        for occurrence in _requirement_ids(relative, text, id_pattern):
+        for occurrence in _requirement_ids(relative, text, id_pattern, match_budget):
+            if requirements_mode == "definitions" and not occurrence.is_definition:
+                continue
             requirement_occurrences[occurrence.identifier].append(occurrence)
 
     for path in specification_paths:
-        text = _read_text(path, text_cache)
+        text = _read_text(root, path, text_cache)
         if text is None:
             continue
         relative = path.relative_to(root)
         result.scanned_files.add(relative)
-        for identifier, location in _specification_ids(relative, text, id_pattern, extension):
+        for identifier, location in _specification_ids(
+            relative, text, id_pattern, extension, match_budget
+        ):
             specification_occurrences[identifier].append(location)
 
     for path in test_paths:
-        text = _read_text(path, text_cache)
+        text = _read_text(root, path, text_cache)
         if text is None:
             continue
         relative = path.relative_to(root)
         result.scanned_files.add(relative)
-        tested_ids.update(match.group(0) for match in id_pattern.finditer(text))
+        tested_ids.update(
+            match.group(0) for match in _identifier_matches(id_pattern, text, match_budget)
+        )
 
     requirement_locations = {
         identifier: _canonical_requirement_location(occurrences)
@@ -106,23 +149,30 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
 
     requirement_ids = set(requirement_locations)
     specification_ids = set(specification_locations)
+    all_ids = sorted(requirement_ids | specification_ids)
+    reported_ids = {
+        identifier: identifier if pattern_source == DEFAULT_ID_PATTERN else f"custom-id-{index}"
+        for index, identifier in enumerate(all_ids, start=1)
+    }
 
     for identifier in sorted(requirement_ids - specification_ids):
+        reported = reported_ids[identifier]
         result.findings.append(
             Finding(
                 code="TRACE001",
-                message=f"Requirement '{identifier}' is missing from the specification.",
+                message=f"Requirement '{reported}' is missing from the specification.",
                 severity=Severity.ERROR,
                 location=requirement_locations[identifier],
-                hint=f"Add {extension}: {identifier} to the implementing OpenAPI operation.",
+                hint=f"Add the {reported} value to {extension} on the implementing operation.",
             )
         )
 
     for identifier in sorted(specification_ids - requirement_ids):
+        reported = reported_ids[identifier]
         result.findings.append(
             Finding(
                 code="TRACE002",
-                message=f"Specification references unknown requirement '{identifier}'.",
+                message=f"Specification references unknown requirement '{reported}'.",
                 severity=Severity.ERROR,
                 location=specification_locations[identifier],
                 hint="Define the requirement or remove the stale specification reference.",
@@ -130,13 +180,14 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
         )
 
     for identifier in sorted(specification_ids - tested_ids):
+        reported = reported_ids[identifier]
         result.findings.append(
             Finding(
                 code="TRACE003",
-                message=f"Specification feature '{identifier}' has no matching test.",
+                message=f"Specification feature '{reported}' has no matching test.",
                 severity=Severity.ERROR,
                 location=specification_locations[identifier],
-                hint=f"Reference {identifier} in a configured test file.",
+                hint=f"Reference {reported} in a configured test file.",
             )
         )
 
@@ -151,10 +202,11 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
         )
         if len(definitions) < 2:
             continue
+        reported = reported_ids[identifier]
         result.findings.append(
             Finding(
                 code="TRACE004",
-                message=f"Requirement '{identifier}' is defined more than once.",
+                message=f"Requirement '{reported}' is defined more than once.",
                 severity=Severity.WARNING,
                 location=definitions[1],
                 hint="Keep one canonical requirement definition and link to it elsewhere.",
@@ -162,8 +214,7 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
             )
         )
 
-    result.findings = result.sorted_findings()
-    return result
+    return apply_rule_policy(result, config_mapping)
 
 
 class _RequirementOccurrence:
@@ -215,22 +266,47 @@ def _glob_files(root: Path, configured: Any, ignore: tuple[str, ...]) -> tuple[P
             normalized = normalized[2:]
         if not normalized:
             continue
-        for pattern in _expand_braces(normalized):
+        normalized_path = PurePosixPath(normalized)
+        if (
+            normalized.startswith("/")
+            or (len(normalized) >= 3 and normalized[1:3] == ":/")
+            or ".." in normalized_path.parts
+        ):
+            raise ValueError("Traceability file patterns must stay inside the repository root")
+        patterns: list[str] = []
+        for expanded in _expand_braces(normalized):
+            patterns.append(expanded)
+            if len(patterns) > 32:
+                raise ValueError("Traceability brace expansion exceeds 32 patterns")
+        for pattern in patterns:
             try:
                 candidates = root.glob(pattern)
                 for candidate in candidates:
-                    if not candidate.is_file():
-                        continue
                     try:
-                        candidate.resolve().relative_to(root)
                         relative = candidate.relative_to(root)
                     except ValueError:
                         continue
                     if _is_ignored(relative, ignore):
                         continue
+                    if candidate.is_symlink():
+                        raise _TraceFileError(
+                            f"Configured traceability file must not be a symbolic link: {relative}"
+                        )
+                    if not candidate.is_file():
+                        continue
+                    try:
+                        candidate.resolve().relative_to(root)
+                    except ValueError:
+                        continue
                     found.add(candidate)
-            except (OSError, ValueError):
-                continue
+                    if len(found) > MAX_SCAN_FILES:
+                        raise _TraceFileError(
+                            f"traceability file discovery exceeds {MAX_SCAN_FILES} files"
+                        )
+            except _TraceFileError:
+                raise
+            except (OSError, ValueError, NotImplementedError) as exc:
+                raise ValueError(f"Invalid traceability file pattern {pattern!r}") from exc
     return tuple(sorted(found, key=lambda item: item.relative_to(root).as_posix()))
 
 
@@ -262,28 +338,49 @@ def _matches_ignore(relative: str, raw_pattern: str) -> bool:
     return False
 
 
-def _read_text(path: Path, cache: dict[Path, str | None]) -> str | None:
+def _read_text(root: Path, path: Path, cache: dict[Path, str | None]) -> str | None:
     if path in cache:
         return cache[path]
     try:
-        data = path.read_bytes()
-    except OSError:
-        cache[path] = None
-        return None
-    if b"\x00" in data:
-        cache[path] = None
-        return None
-    try:
-        text = data.decode("utf-8-sig")
-    except UnicodeDecodeError:
+        text = read_limited_text(path, root=root)
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Invalid UTF-8 in configured file: {path.relative_to(root)}") from exc
+    except OSError as exc:
+        raise ValueError(f"Cannot read configured file: {path.relative_to(root)}") from exc
+    if "\x00" in text:
         cache[path] = None
         return None
     cache[path] = text
     return text
 
 
+def _identifier_matches(
+    id_pattern: Any, text: str, budget: _MatchBudget
+) -> tuple[Any, ...]:
+    matches: list[Any] = []
+    try:
+        for match in id_pattern.finditer(text, timeout=budget.remaining()):
+            matches.append(match)
+            budget.record_match()
+            if len(matches) > _MAX_MATCHES_PER_VALUE:
+                raise ValueError("Traceability id_pattern produced too many matches")
+    except TimeoutError as exc:
+        raise ValueError("Traceability id_pattern matching timed out") from exc
+    for match in matches:
+        identifier = match.group(0)
+        if (
+            not _SAFE_IDENTIFIER_RE.fullmatch(identifier)
+            or not any(separator in identifier for separator in "-_.:")
+        ):
+            raise ValueError(
+                "Traceability id_pattern matched an unsafe identifier; "
+                "use 2-128 ASCII letters, digits, '.', '_', ':', or '-' with a separator"
+            )
+    return tuple(matches)
+
+
 def _requirement_ids(
-    path: Path, text: str, id_pattern: re.Pattern[str]
+    path: Path, text: str, id_pattern: Any, budget: _MatchBudget
 ) -> Iterable[_RequirementOccurrence]:
     lines = text.splitlines()
     fence: str | None = None
@@ -305,7 +402,7 @@ def _requirement_ids(
         line, in_comment = _without_html_comments(original_line, in_comment)
         if not line:
             continue
-        for match in id_pattern.finditer(line):
+        for match in _identifier_matches(id_pattern, line, budget):
             location = Location(path=path, line=index + 1, column=match.start() + 1)
             yield _RequirementOccurrence(
                 match.group(0),
@@ -339,7 +436,7 @@ def _without_html_comments(line: str, in_comment: bool) -> tuple[str, bool]:
     return "".join(visible), in_comment
 
 
-def _is_definition_line(lines: list[str], index: int, line: str, match: re.Match[str]) -> bool:
+def _is_definition_line(lines: list[str], index: int, line: str, match: Any) -> bool:
     if _HEADING_RE.match(line):
         return True
     if index + 1 < len(lines) and _SETEXT_RE.match(lines[index + 1]):
@@ -390,60 +487,90 @@ def _canonical_requirement_location(
 def _specification_ids(
     path: Path,
     text: str,
-    id_pattern: re.Pattern[str],
+    id_pattern: Any,
     extension: str,
+    budget: _MatchBudget,
 ) -> Iterable[tuple[str, Location]]:
     try:
         documents = tuple(yaml.compose_all(text, Loader=yaml.SafeLoader))
-    except yaml.YAMLError:
-        yield from _fallback_specification_ids(path, text, id_pattern, extension)
-        return
-
-    lines = text.splitlines()
-    seen: set[int] = set()
-    for document in documents:
-        if document is not None:
-            yield from _walk_openapi_node(document, path, lines, id_pattern, extension, seen)
+        lines = text.splitlines()
+        seen: set[int] = set()
+        for document in documents:
+            if document is not None:
+                yield from _walk_openapi_node(
+                    document, path, lines, id_pattern, extension, budget, seen, depth=0
+                )
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        position = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""
+        raise ValueError(f"Invalid YAML/JSON specification {path}{position}") from exc
+    except RecursionError as exc:
+        raise ValueError(f"Specification nesting is too deep in {path}") from exc
 
 
 def _walk_openapi_node(
     node: Node,
     path: Path,
     lines: list[str],
-    id_pattern: re.Pattern[str],
+    id_pattern: Any,
     extension: str,
+    budget: _MatchBudget,
     seen: set[int],
+    depth: int,
 ) -> Iterable[tuple[str, Location]]:
+    if depth > _MAX_YAML_DEPTH:
+        raise ValueError(f"Specification nesting exceeds {_MAX_YAML_DEPTH} levels in {path}")
     node_identity = id(node)
     if node_identity in seen:
         return
     seen.add(node_identity)
+    if len(seen) > _MAX_YAML_NODES:
+        raise ValueError(f"Specification exceeds {_MAX_YAML_NODES} YAML nodes in {path}")
 
     if isinstance(node, MappingNode):
         for key_node, value_node in node.value:
             if isinstance(key_node, ScalarNode) and key_node.value == extension:
-                yield from _ids_from_extension_value(value_node, path, lines, id_pattern)
-            yield from _walk_openapi_node(value_node, path, lines, id_pattern, extension, seen)
+                yield from _ids_from_extension_value(
+                    value_node, path, lines, id_pattern, budget, seen=set(), depth=0
+                )
+            yield from _walk_openapi_node(
+                value_node, path, lines, id_pattern, extension, budget, seen, depth + 1
+            )
     elif isinstance(node, SequenceNode):
         for child in node.value:
-            yield from _walk_openapi_node(child, path, lines, id_pattern, extension, seen)
+            yield from _walk_openapi_node(
+                child, path, lines, id_pattern, extension, budget, seen, depth + 1
+            )
 
 
 def _ids_from_extension_value(
     node: Node,
     path: Path,
     lines: list[str],
-    id_pattern: re.Pattern[str],
+    id_pattern: Any,
+    budget: _MatchBudget,
+    seen: set[int],
+    depth: int,
 ) -> Iterable[tuple[str, Location]]:
+    if depth > _MAX_YAML_DEPTH:
+        raise ValueError(f"Specification extension nesting exceeds {_MAX_YAML_DEPTH} levels")
+    identity = id(node)
+    if identity in seen:
+        return
+    seen.add(identity)
+    if len(seen) > _MAX_YAML_NODES:
+        raise ValueError("Specification extension contains too many YAML nodes")
     if isinstance(node, ScalarNode):
         if node.tag != "tag:yaml.org,2002:str":
             return
-        for match in id_pattern.finditer(node.value):
+        for match in _identifier_matches(id_pattern, node.value, budget):
             identifier = match.group(0)
             yield identifier, _node_identifier_location(path, lines, node, identifier)
     elif isinstance(node, SequenceNode):
         for child in node.value:
-            yield from _ids_from_extension_value(child, path, lines, id_pattern)
+            yield from _ids_from_extension_value(
+                child, path, lines, id_pattern, budget, seen=seen, depth=depth + 1
+            )
 
 
 def _node_identifier_location(
@@ -461,35 +588,6 @@ def _node_identifier_location(
         line=node.start_mark.line + 1,
         column=node.start_mark.column + 1,
     )
-
-
-def _fallback_specification_ids(
-    path: Path,
-    text: str,
-    id_pattern: re.Pattern[str],
-    extension: str,
-) -> Iterable[tuple[str, Location]]:
-    key_pattern = re.compile(
-        rf"^(?P<indent>\s*)[\"']?{re.escape(extension)}[\"']?\s*:\s*(?P<value>.*)$"
-    )
-    lines = text.splitlines()
-    index = 0
-    while index < len(lines):
-        key_match = key_pattern.match(lines[index])
-        if key_match is None:
-            index += 1
-            continue
-        base_indent = len(key_match.group("indent"))
-        end = index + 1
-        while end < len(lines):
-            candidate = lines[end]
-            if candidate.strip() and len(candidate) - len(candidate.lstrip()) <= base_indent:
-                break
-            end += 1
-        for line_index in range(index, end):
-            for match in id_pattern.finditer(lines[line_index]):
-                yield match.group(0), Location(path, line_index + 1, match.start() + 1)
-        index = end
 
 
 def _location_key(location: Location) -> tuple[str, int, int]:

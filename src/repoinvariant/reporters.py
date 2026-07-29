@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
-from repotruth import __version__
-from repotruth.models import Finding, ScanResult, Severity
+from repoinvariant import __version__
+from repoinvariant.models import Finding, ScanResult, Severity
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -28,19 +30,45 @@ def _summary(result: ScanResult) -> dict[str, int]:
     }
 
 
-def render_text(result: ScanResult, root: Path) -> str:
+def _display(value: str) -> str:
+    """Keep terminal and Markdown reports on one inert physical line."""
+
+    escaped: list[str] = []
+    for character in value:
+        codepoint = ord(character)
+        if (
+            unicodedata.category(character).startswith("C")
+            or character in {"\u2028", "\u2029"}
+        ):
+            if codepoint <= 0xFF:
+                escaped.append(f"\\x{codepoint:02x}")
+            elif codepoint <= 0xFFFF:
+                escaped.append(f"\\u{codepoint:04x}")
+            else:
+                escaped.append(f"\\U{codepoint:08x}")
+        else:
+            escaped.append(character)
+    result = "".join(escaped)
+    return f"./{result}" if result.startswith("::") else result
+
+
+def render_text(
+    result: ScanResult, root: Path, fail_on: Severity = Severity.ERROR
+) -> str:
     lines: list[str] = []
     for finding in result.sorted_findings():
         if finding.location:
-            source = _relative(finding.location.path, root)
+            source = _display(_relative(finding.location.path, root))
             position = f"{source}:{finding.location.line}:{finding.location.column}"
         else:
             position = "."
-        lines.append(f"{position}: {finding.severity.value} {finding.code}: {finding.message}")
+        lines.append(
+            f"{position}: {finding.severity.value} {finding.code}: {_display(finding.message)}"
+        )
         if finding.hint:
-            lines.append(f"  hint: {finding.hint}")
+            lines.append(f"  hint: {_display(finding.hint)}")
     summary = _summary(result)
-    status = "PASS" if result.ok else "FAIL"
+    status = "FAIL" if result.blocks(fail_on) else "PASS"
     lines.append(
         f"{status}: {summary['files']} files, {summary['errors']} errors, "
         f"{summary['warnings']} warnings"
@@ -57,10 +85,16 @@ def _finding_payload(finding: Finding, root: Path) -> dict[str, Any]:
     return payload
 
 
-def render_json(result: ScanResult, root: Path) -> str:
+def render_json(
+    result: ScanResult, root: Path, fail_on: Severity = Severity.ERROR
+) -> str:
+    blocking = result.blocks(fail_on)
     payload = {
-        "tool": {"name": "RepoTruth", "version": __version__},
-        "ok": result.ok,
+        "schema_version": 1,
+        "tool": {"name": "RepoInvariant", "version": __version__},
+        "ok": not blocking,
+        "exit_code": 1 if blocking else 0,
+        "blocking_threshold": fail_on.value,
         "summary": _summary(result),
         "findings": [_finding_payload(item, root) for item in result.sorted_findings()],
     }
@@ -68,14 +102,16 @@ def render_json(result: ScanResult, root: Path) -> str:
 
 
 def _escape_table(value: str) -> str:
-    return value.replace("|", "\\|").replace("\n", " ")
+    return _display(value).replace("|", "\\|").replace("`", "&#96;")
 
 
-def render_markdown(result: ScanResult, root: Path) -> str:
+def render_markdown(
+    result: ScanResult, root: Path, fail_on: Severity = Severity.ERROR
+) -> str:
     summary = _summary(result)
-    status = "✅ Pass" if result.ok else "❌ Fail"
+    status = "❌ Fail" if result.blocks(fail_on) else "✅ Pass"
     lines = [
-        "# RepoTruth report",
+        "# RepoInvariant report",
         "",
         f"**{status}** — {summary['files']} files, {summary['errors']} errors, "
         f"{summary['warnings']} warnings.",
@@ -88,7 +124,7 @@ def render_markdown(result: ScanResult, root: Path) -> str:
             if item.location:
                 location = f"{_relative(item.location.path, root)}:{item.location.line}"
             lines.append(
-                f"| {item.severity.value} | `{item.code}` | `{_escape_table(location)}` | "
+                f"| {item.severity.value} | `{item.code}` | {_escape_table(location)} | "
                 f"{_escape_table(item.message)} |"
             )
     else:
@@ -96,7 +132,10 @@ def render_markdown(result: ScanResult, root: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_sarif(result: ScanResult, root: Path) -> str:
+def render_sarif(
+    result: ScanResult, root: Path, fail_on: Severity = Severity.ERROR
+) -> str:
+    del fail_on  # SARIF encodes finding levels; the process exit policy is separate.
     findings = result.sorted_findings()
     rules: dict[str, dict[str, Any]] = {}
     sarif_results: list[dict[str, Any]] = []
@@ -119,7 +158,9 @@ def render_sarif(result: ScanResult, root: Path) -> str:
             entry["locations"] = [
                 {
                     "physicalLocation": {
-                        "artifactLocation": {"uri": _relative(item.location.path, root)},
+                        "artifactLocation": {
+                            "uri": quote(_relative(item.location.path, root), safe="/@-._~")
+                        },
                         "region": {
                             "startLine": max(item.location.line, 1),
                             "startColumn": max(item.location.column, 1),
@@ -135,9 +176,9 @@ def render_sarif(result: ScanResult, root: Path) -> str:
             {
                 "tool": {
                     "driver": {
-                        "name": "RepoTruth",
+                        "name": "RepoInvariant",
                         "version": __version__,
-                        "informationUri": "https://github.com/xixvivji/RepoTruth",
+                        "informationUri": "https://github.com/xixvivji/RepoInvariant",
                         "rules": [rules[key] for key in sorted(rules)],
                     }
                 },
@@ -156,11 +197,16 @@ def _sarif_level(severity: Severity) -> str:
     }[severity]
 
 
-def render(result: ScanResult, root: Path, format_name: str) -> str:
+def render(
+    result: ScanResult,
+    root: Path,
+    format_name: str,
+    fail_on: Severity = Severity.ERROR,
+) -> str:
     renderers = {
         "text": render_text,
         "json": render_json,
         "markdown": render_markdown,
         "sarif": render_sarif,
     }
-    return renderers[format_name](result, root)
+    return renderers[format_name](result, root, fail_on)

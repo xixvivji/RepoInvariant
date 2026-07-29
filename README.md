@@ -1,8 +1,8 @@
-# RepoTruth
+# RepoInvariant
 
-> Pre-alpha: catch contract drift across repository artifacts before merge.
+> Alpha: catch contract drift across repository artifacts before merge.
 
-RepoTruth is a deterministic CLI and GitHub Action that checks whether the contracts spread
+RepoInvariant is a deterministic CLI and GitHub Action that checks whether the contracts spread
 across your repository still agree. It focuses on two expensive, repeatable failure modes:
 
 - environment variables drifting between `.env.example`, Docker Compose, Kubernetes,
@@ -14,28 +14,26 @@ required.
 
 ## Status
 
-RepoTruth is under active pre-alpha development. The configuration and finding codes may change
-before `v0.1.0`. Pin a commit SHA when trying the GitHub Action.
+RepoInvariant `v0.1.0` is the first public alpha. The configuration and finding codes may change
+before `v1.0.0`. Pin an exact commit SHA when using the GitHub Action.
 
 ## Quick start
 
-Install from a local checkout:
+Install the CLI from PyPI:
 
 ```bash
-git clone https://github.com/xixvivji/RepoTruth.git
-cd RepoTruth
-uv tool install .
+uv tool install repoinvariant
 
 cd /path/to/your/repository
-repotruth init
-repotruth check .
+repoinvariant init
+repoinvariant check .
 ```
 
 During development, use:
 
 ```bash
-uv sync --extra dev
-uv run repotruth check examples/ticket-service
+uv sync --frozen --extra dev
+uv run repoinvariant check examples/ticket-service
 uv run pytest
 ```
 
@@ -49,7 +47,7 @@ FAIL: 6 files, 2 errors, 0 warnings
 
 ## Configuration
 
-Run `repotruth init` to create `.repotruth.yml`:
+Run `repoinvariant init` to create `.repoinvariant.yml`:
 
 ```yaml
 version: 1
@@ -70,16 +68,39 @@ features:
   tests: [tests/**/*, src/test/**/*]
   id_pattern: '\bREQ-[A-Z0-9][A-Z0-9-]*\b'
   openapi_extension: x-feature-id
+  requirements_mode: definitions
   ignore: []
+
+rules:
+  ENV001: error
+  ENV002: warning
+  ENV003: warning
+  TRACE001: error
+  TRACE002: error
+  TRACE003: error
+  TRACE004: warning
 ```
+
+`requirements_mode: definitions` counts IDs only when they look like canonical Markdown
+definitions (headings, definition lists, and the first column of tables). Set it to `mentions` for
+legacy repositories where any prose reference is authoritative.
+
+The built-in `REQ-*` pattern is printed verbatim because it is a constrained public identifier
+format. Matches from a custom `id_pattern` are reported as deterministic `custom-id-N` labels;
+source locations remain exact, but arbitrary matched repository text never reaches logs or report
+artifacts.
+
+Each finding code can be set to `error`, `warning`, or `off`. This makes staged adoption explicit:
+start a noisy rule as a warning, fix the baseline, then promote it to an error. Quote `"off"` when
+editing YAML to avoid YAML 1.1 boolean parsing surprises.
 
 Then run one of the stable report formats:
 
 ```bash
-repotruth check . --format text
-repotruth check . --format json --output repotruth-report.json
-repotruth check . --format markdown --output repotruth-report.md
-repotruth check . --format sarif --output repotruth-report.sarif
+repoinvariant check . --format text
+repoinvariant check . --format json --output repoinvariant-report.json
+repoinvariant check . --format markdown --output repoinvariant-report.md
+repoinvariant check . --format sarif --output repoinvariant-report.sarif
 ```
 
 Exit code `0` means no blocking drift, `1` means a configured contract failed, and `2` means
@@ -87,24 +108,28 @@ the command or configuration was invalid. Add `--fail-on warning` for a stricter
 
 ## GitHub Action
 
-The repository must be checked out before RepoTruth runs. Until the first stable tag, pin an
-exact commit SHA:
+The repository must be checked out before RepoInvariant runs. For supply-chain safety, pin an exact
+commit SHA:
 
 ```yaml
 permissions:
   contents: read
 
 steps:
-  - uses: actions/checkout@v4
-  - uses: xixvivji/RepoTruth@<commit-sha>
+  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  - uses: xixvivji/RepoInvariant@<commit-sha>
     with:
       path: .
       format: sarif
-      output: repotruth-report.sarif
+      output: repoinvariant-report.sarif
+      no-features: "true" # optional during staged adoption
 ```
 
 The action installs only the source bundled with the pinned action revision. It does not transmit
 repository contents.
+
+The action also accepts `no-env` and `no-features` boolean inputs. Prefer rule-level severity
+configuration when only one check needs a temporary downgrade.
 
 ## Finding codes
 
@@ -120,7 +145,7 @@ repository contents.
 
 ## Design boundaries
 
-RepoTruth deliberately does not:
+RepoInvariant deliberately does not:
 
 - decide whether two differently worded requirements mean the same thing;
 - modify repository files automatically;
@@ -128,7 +153,13 @@ RepoTruth deliberately does not:
 - print secret values found in configuration;
 - claim full OpenAPI, Compose, Kubernetes, or Spring validation.
 
-Use their native validators alongside RepoTruth. RepoTruth owns the gap **between** artifacts.
+Use their native validators alongside RepoInvariant. RepoInvariant owns the gap **between** artifacts.
+
+Configured files and report destinations must stay inside the repository. RepoInvariant rejects
+configuration/output symlinks, limits configuration files to 256 KiB and scanned files to 2 MiB,
+and fails closed on malformed configured YAML. Custom requirement patterns run with a timeout and
+one shared matching-time budget. File reads and atomic report writes use no-follow directory
+descriptors so a concurrent symlink swap cannot redirect them outside the repository.
 
 ## Roadmap
 
@@ -138,12 +169,11 @@ Use their native validators alongside RepoTruth. RepoTruth owns the gap **betwee
 - [x] Composite GitHub Action
 - [ ] Version-baseline contracts across Gradle, Docker, CI, and documentation
 - [ ] Reusable parser plugin API
-- [ ] PyPI trusted publishing and signed releases
+- [x] PyPI trusted publishing and provenance-attested release automation
 - [ ] Real-world compatibility fixtures from external projects
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) to help shape `v0.1.0`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) to help shape future releases.
 
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
-

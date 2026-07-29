@@ -7,17 +7,18 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from repotruth import __version__
-from repotruth.config import CONFIG_NAME, DEFAULT_CONFIG_TEXT, ConfigError, load_config
-from repotruth.env_contracts import scan_env_contracts
-from repotruth.models import ScanResult
-from repotruth.reporters import render
-from repotruth.traceability import scan_traceability
+from repoinvariant import __version__
+from repoinvariant.config import CONFIG_NAME, DEFAULT_CONFIG_TEXT, ConfigError, load_config
+from repoinvariant.env_contracts import scan_env_contracts
+from repoinvariant.filesystem import atomic_write_text
+from repoinvariant.models import ScanResult, Severity
+from repoinvariant.reporters import render
+from repoinvariant.traceability import scan_traceability
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="repotruth",
+        prog="repoinvariant",
         description="Catch contract drift across repository artifacts before merge.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -49,9 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _check(args: argparse.Namespace) -> int:
-    root = args.path.expanduser().resolve()
+    try:
+        root = args.path.expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        print(f"repoinvariant: cannot resolve repository root: {exc}", file=sys.stderr)
+        return 2
     if not root.is_dir():
-        print(f"repotruth: repository root does not exist: {root}", file=sys.stderr)
+        print(f"repoinvariant: repository root does not exist: {root}", file=sys.stderr)
         return 2
     try:
         config = load_config(root, args.config)
@@ -61,36 +66,43 @@ def _check(args: argparse.Namespace) -> int:
         if not args.no_features:
             result.extend(scan_traceability(root, config))
     except (ConfigError, OSError, UnicodeError, ValueError) as exc:
-        print(f"repotruth: {exc}", file=sys.stderr)
+        print(f"repoinvariant: {exc}", file=sys.stderr)
         return 2
 
-    report = render(result, root, args.format_name)
-    if args.output:
-        output = args.output if args.output.is_absolute() else Path.cwd() / args.output
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(report, encoding="utf-8")
-        print(f"RepoTruth report written to {output}", file=sys.stderr)
-    else:
-        print(report, end="")
+    fail_on = Severity(args.fail_on)
+    report = render(result, root, args.format_name, fail_on)
+    try:
+        if args.output:
+            output = atomic_write_text(root, args.output, report, label="report output")
+            print(f"RepoInvariant report written to {output}", file=sys.stderr)
+        else:
+            print(report, end="")
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"repoinvariant: {exc}", file=sys.stderr)
+        return 2
 
-    if result.error_count:
-        return 1
-    if args.fail_on == "warning" and result.warning_count:
-        return 1
-    return 0
+    return 1 if result.blocks(fail_on) else 0
 
 
 def _init(args: argparse.Namespace) -> int:
-    root = args.path.expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    try:
+        root = args.path.expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+    except (OSError, RuntimeError) as exc:
+        print(f"repoinvariant: cannot create repository root: {exc}", file=sys.stderr)
+        return 2
     destination = root / CONFIG_NAME
-    if destination.exists() and not args.force:
+    if (destination.exists() or destination.is_symlink()) and not args.force:
         print(
-            f"repotruth: {destination} already exists (use --force to replace it)",
+            f"repoinvariant: {destination} already exists (use --force to replace it)",
             file=sys.stderr,
         )
         return 2
-    destination.write_text(DEFAULT_CONFIG_TEXT, encoding="utf-8")
+    try:
+        atomic_write_text(root, destination, DEFAULT_CONFIG_TEXT, label="configuration file")
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"repoinvariant: {exc}", file=sys.stderr)
+        return 2
     print(f"Created {destination}")
     return 0
 

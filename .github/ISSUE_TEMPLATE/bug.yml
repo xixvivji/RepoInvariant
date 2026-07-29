@@ -1,0 +1,56 @@
+name: Bug report
+description: Report a reproducible false positive, false negative, crash, or unsafe output.
+title: "bug: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Use synthetic values only. Never paste credentials, private repository contents, or
+        production configuration.
+  - type: input
+    id: version
+    attributes:
+      label: RepoInvariant version
+      placeholder: "0.1.0 or commit SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: scanner
+    attributes:
+      label: Area
+      options:
+        - Environment contracts
+        - Feature traceability
+        - CLI or report format
+        - GitHub Action
+        - Packaging or release
+    validations:
+      required: true
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Minimal synthetic reproducer
+      description: Include the smallest safe files and command that demonstrate the problem.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed all secrets and private repository content from this report.
+          required: true

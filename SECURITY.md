@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-RepoTruth is pre-alpha. Security fixes are applied to the latest commit on `main` until the first
-versioned release.
+RepoInvariant `0.x` is alpha software. Security fixes are applied to the latest release and the
+current `main` branch until the first stable compatibility policy is published.
 
 ## Reporting a vulnerability
 
@@ -15,7 +15,7 @@ suggested mitigation. You should receive an acknowledgement within seven days.
 
 ## Data handling
 
-RepoTruth scans local files and produces local reports. It does not make network requests during a
+RepoInvariant scans local files and produces local reports. It does not make network requests during a
 scan. Parsers must never include discovered secret values in findings or reports; variable names
-and source locations are sufficient evidence.
-
+and source locations are sufficient evidence. Matches from custom requirement patterns receive
+opaque labels rather than being copied into output.

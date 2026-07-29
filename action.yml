@@ -1,4 +1,4 @@
-name: RepoTruth
+name: RepoInvariant
 description: Catch environment and feature-traceability contract drift before merge.
 author: xixvivji
 
@@ -27,32 +27,65 @@ inputs:
     description: Minimum blocking severity (error or warning).
     required: false
     default: error
+  no-env:
+    description: Set to true to skip environment-contract checks.
+    required: false
+    default: "false"
+  no-features:
+    description: Set to true to skip feature-traceability checks.
+    required: false
+    default: "false"
 
 runs:
   using: composite
   steps:
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: "3.12"
-    - name: Install pinned RepoTruth action source
+    - name: Set up uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        version: "0.12.0"
+        enable-cache: true
+        cache-dependency-glob: ${{ github.action_path }}/uv.lock
+    - name: Sync locked RepoInvariant action dependencies
       shell: bash
-      run: python -m pip install "${{ github.action_path }}"
+      env:
+        REPOINVARIANT_ACTION_PATH: ${{ github.action_path }}
+      run: uv sync --project "$REPOINVARIANT_ACTION_PATH" --frozen --no-dev
     - name: Check repository contracts
       shell: bash
       env:
-        REPOTRUTH_PATH: ${{ inputs.path }}
-        REPOTRUTH_CONFIG: ${{ inputs.config }}
-        REPOTRUTH_FORMAT: ${{ inputs.format }}
-        REPOTRUTH_OUTPUT: ${{ inputs.output }}
-        REPOTRUTH_FAIL_ON: ${{ inputs.fail-on }}
+        REPOINVARIANT_PATH: ${{ inputs.path }}
+        REPOINVARIANT_CONFIG: ${{ inputs.config }}
+        REPOINVARIANT_FORMAT: ${{ inputs.format }}
+        REPOINVARIANT_OUTPUT: ${{ inputs.output }}
+        REPOINVARIANT_FAIL_ON: ${{ inputs.fail-on }}
+        REPOINVARIANT_NO_ENV: ${{ inputs.no-env }}
+        REPOINVARIANT_NO_FEATURES: ${{ inputs.no-features }}
+        REPOINVARIANT_ACTION_PATH: ${{ github.action_path }}
       run: |
-        args=(check "$REPOTRUTH_PATH" --format "$REPOTRUTH_FORMAT" --fail-on "$REPOTRUTH_FAIL_ON")
-        if [[ -n "$REPOTRUTH_CONFIG" ]]; then
-          args+=(--config "$REPOTRUTH_CONFIG")
-        fi
-        if [[ -n "$REPOTRUTH_OUTPUT" ]]; then
-          args+=(--output "$REPOTRUTH_OUTPUT")
-        fi
-        repotruth "${args[@]}"
+        set -Eeuo pipefail
 
+        args=(check "--format=$REPOINVARIANT_FORMAT" "--fail-on=$REPOINVARIANT_FAIL_ON")
+        if [[ -n "$REPOINVARIANT_CONFIG" ]]; then
+          args+=("--config=$REPOINVARIANT_CONFIG")
+        fi
+        if [[ -n "$REPOINVARIANT_OUTPUT" ]]; then
+          args+=("--output=$REPOINVARIANT_OUTPUT")
+        fi
+
+        case "$REPOINVARIANT_NO_ENV" in
+          true) args+=(--no-env) ;;
+          false) ;;
+          *) printf 'no-env must be true or false, got %q\n' "$REPOINVARIANT_NO_ENV" >&2; exit 2 ;;
+        esac
+        case "$REPOINVARIANT_NO_FEATURES" in
+          true) args+=(--no-features) ;;
+          false) ;;
+          *) printf 'no-features must be true or false, got %q\n' "$REPOINVARIANT_NO_FEATURES" >&2; exit 2 ;;
+        esac
+
+        args+=(-- "$REPOINVARIANT_PATH")
+        uv run --project "$REPOINVARIANT_ACTION_PATH" --frozen repoinvariant "${args[@]}"

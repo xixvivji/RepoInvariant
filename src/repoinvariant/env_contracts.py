@@ -13,7 +13,14 @@ from typing import Any
 import yaml
 from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
-from repotruth.models import Finding, Location, ScanResult, Severity
+from repoinvariant.filesystem import (
+    MAX_SCAN_BYTES,
+    MAX_SCAN_FILES,
+    contained_path,
+    read_limited_text,
+)
+from repoinvariant.models import Finding, Location, ScanResult, Severity
+from repoinvariant.policy import apply_rule_policy
 
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _DOTENV_LINE_RE = re.compile(
@@ -21,8 +28,9 @@ _DOTENV_LINE_RE = re.compile(
     r"(?:\s*(?P<equals>=)\s*(?P<value>.*))?\s*$"
 )
 _COMPOSE_REFERENCE_RE = re.compile(
-    r"(?<!\$)\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
-    r"(?:(?P<operator>:-|-|:\?)(?P<argument>[^}]*))?\}"
+    r"(?<!\$)\$(?:\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+    r"(?:(?P<operator>:-|-|:\?|\?|:\+|\+)(?P<argument>[^}]*))?\}"
+    r"|(?P<plain_name>[A-Za-z_][A-Za-z0-9_]*))"
 )
 _PLAIN_REFERENCE_RE = re.compile(r"(?<!\$)\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)\}")
 _GITHUB_REFERENCE_RE = re.compile(r"\b(?:secrets|vars)\.(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b")
@@ -30,6 +38,8 @@ _SPRING_REFERENCE_RE = re.compile(
     r"(?<!\$)\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
     r"(?::(?P<default>[^{}]*))?\}"
 )
+_MAX_YAML_DEPTH = 100
+_MAX_YAML_NODES = 20_000
 
 _DEFAULT_PATTERNS: dict[str, tuple[str, ...]] = {
     "contracts": (".env", ".env.example", ".env.sample", ".env.template"),
@@ -102,10 +112,18 @@ def _normalize_dotenv_value(value: str) -> str:
     return value
 
 
+def _read_scan_text(root: Path, path: Path) -> str:
+    try:
+        return read_limited_text(path, root=root, max_bytes=MAX_SCAN_BYTES)
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"invalid UTF-8 in configured file: {path}") from exc
+
+
 def _relative_path(root: Path, path: Path) -> Path | None:
     try:
-        return path.resolve().relative_to(root.resolve())
-    except (OSError, ValueError):
+        safe_path = contained_path(root, path, label="configured file")
+        return safe_path.relative_to(root.resolve())
+    except ValueError:
         return None
 
 
@@ -116,7 +134,7 @@ def _location(root: Path, path: Path, line: int, column: int = 1) -> Location:
 
 def _parse_dotenv(root: Path, path: Path) -> list[_Occurrence]:
     occurrences: list[_Occurrence] = []
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = _read_scan_text(root, path)
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
@@ -127,7 +145,9 @@ def _parse_dotenv(root: Path, path: Path) -> list[_Occurrence]:
         value = match.group("value")
         digest = None
         if match.group("equals") is not None:
-            digest = _default_digest(_normalize_dotenv_value(value or ""))
+            raw_value = _strip_dotenv_comment(value or "").strip()
+            if raw_value:
+                digest = _default_digest(_normalize_dotenv_value(value or ""))
         column = raw_line.find(name) + 1
         occurrences.append(
             _Occurrence(name, _location(root, path, line_number, max(column, 1)), digest)
@@ -135,11 +155,11 @@ def _parse_dotenv(root: Path, path: Path) -> list[_Occurrence]:
     return occurrences
 
 
-def _yaml_documents(text: str) -> list[Node]:
+def _yaml_documents(text: str, path: Path) -> list[Node]:
     try:
         return [document for document in yaml.compose_all(text, Loader=yaml.SafeLoader) if document]
-    except yaml.YAMLError:
-        return []
+    except (RecursionError, yaml.YAMLError) as exc:
+        raise ValueError(f"invalid YAML in configured file: {path}") from exc
 
 
 def _mapping_value(node: Node, name: str) -> Node | None:
@@ -152,14 +172,35 @@ def _mapping_value(node: Node, name: str) -> Node | None:
 
 
 def _walk_nodes(node: Node) -> Iterable[Node]:
-    yield node
-    if isinstance(node, MappingNode):
-        for key_node, value_node in node.value:
-            yield from _walk_nodes(key_node)
-            yield from _walk_nodes(value_node)
-    elif isinstance(node, SequenceNode):
-        for child in node.value:
-            yield from _walk_nodes(child)
+    seen: set[int] = set()
+    active: set[int] = set()
+
+    def walk(current: Node, depth: int) -> Iterable[Node]:
+        if depth > _MAX_YAML_DEPTH:
+            raise ValueError(f"YAML nesting exceeds {_MAX_YAML_DEPTH} levels")
+        identity = id(current)
+        if identity in active:
+            raise ValueError("YAML alias cycle is not supported")
+        if identity in seen:
+            return
+
+        seen.add(identity)
+        if len(seen) > _MAX_YAML_NODES:
+            raise ValueError(f"YAML document exceeds {_MAX_YAML_NODES} nodes")
+        active.add(identity)
+        try:
+            yield current
+            if isinstance(current, MappingNode):
+                for key_node, value_node in current.value:
+                    yield from walk(key_node, depth + 1)
+                    yield from walk(value_node, depth + 1)
+            elif isinstance(current, SequenceNode):
+                for child in current.value:
+                    yield from walk(child, depth + 1)
+        finally:
+            active.remove(identity)
+
+    yield from walk(node, 0)
 
 
 def _node_location(root: Path, path: Path, node: Node, offset: int = 0) -> Location:
@@ -189,7 +230,7 @@ def _compose_references(root: Path, path: Path, documents: Iterable[Node]) -> li
     occurrences: list[_Occurrence] = []
     for document in documents:
         for node in _walk_nodes(document):
-            if not isinstance(node, ScalarNode):
+            if not isinstance(node, ScalarNode) or node.style == "'":
                 continue
             for match in _COMPOSE_REFERENCE_RE.finditer(node.value):
                 digest = None
@@ -197,7 +238,7 @@ def _compose_references(root: Path, path: Path, documents: Iterable[Node]) -> li
                     digest = _default_digest(match.group("argument") or "")
                 occurrences.append(
                     _Occurrence(
-                        match.group("name"),
+                        match.group("name") or match.group("plain_name"),
                         _node_location(root, path, node, match.start()),
                         digest,
                     )
@@ -224,26 +265,22 @@ def _compose_environment(
                         key_node.value
                     ):
                         continue
-                    digest = _literal_yaml_default(value_node, (_COMPOSE_REFERENCE_RE,))
-                    occurrences.append(
-                        _Occurrence(
-                            key_node.value,
-                            _node_location(root, path, key_node),
-                            digest,
+                    if isinstance(value_node, ScalarNode) and (
+                        value_node.tag == "tag:yaml.org,2002:null"
+                    ):
+                        occurrences.append(
+                            _Occurrence(key_node.value, _node_location(root, path, key_node))
                         )
-                    )
             elif isinstance(environment, SequenceNode):
                 for item in environment.value:
                     if not isinstance(item, ScalarNode):
                         continue
-                    name, separator, value = item.value.partition("=")
+                    name, separator, _ = item.value.partition("=")
                     name = name.strip()
                     if not _ENV_NAME_RE.fullmatch(name):
                         continue
-                    digest = None
-                    if separator and not _COMPOSE_REFERENCE_RE.search(value):
-                        digest = _default_digest(value)
-                    occurrences.append(_Occurrence(name, _node_location(root, path, item), digest))
+                    if not separator:
+                        occurrences.append(_Occurrence(name, _node_location(root, path, item)))
 
             env_file = _mapping_value(service, "env_file")
             candidates: list[Node] = []
@@ -265,8 +302,8 @@ def _scan_compose(
     result: ScanResult,
     ignored_paths: Sequence[str],
 ) -> list[_Occurrence]:
-    text = path.read_text(encoding="utf-8", errors="replace")
-    documents = _yaml_documents(text)
+    text = _read_scan_text(root, path)
+    documents = _yaml_documents(text, path)
     occurrences = _compose_references(root, path, documents)
     environment, env_file_nodes = _compose_environment(root, path, documents)
     occurrences.extend(environment)
@@ -274,13 +311,18 @@ def _scan_compose(
         reference = env_file_node.value.strip()
         if not reference or _COMPOSE_REFERENCE_RE.search(reference):
             continue
-        candidate = (path.parent / reference).resolve()
-        relative = _relative_path(root, candidate)
-        if (
-            relative is None
-            or not candidate.is_file()
-            or _matches_any(relative.as_posix(), ignored_paths)
-        ):
+        try:
+            candidate = contained_path(
+                root,
+                path.parent / reference,
+                label="Compose env_file",
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Compose env_file must stay inside the repository: {reference}"
+            ) from exc
+        relative = candidate.relative_to(root.resolve())
+        if not candidate.is_file() or _matches_any(relative.as_posix(), ignored_paths):
             continue
         result.scanned_files.add(relative)
         occurrences.extend(_parse_dotenv(root, candidate))
@@ -289,46 +331,41 @@ def _scan_compose(
 
 def _container_environment(root: Path, path: Path, document: Node) -> list[_Occurrence]:
     occurrences: list[_Occurrence] = []
-
-    def visit(node: Node) -> None:
-        if isinstance(node, MappingNode):
-            for key_node, value_node in node.value:
-                if (
-                    isinstance(key_node, ScalarNode)
-                    and key_node.value in {"containers", "initContainers"}
-                    and isinstance(value_node, SequenceNode)
-                ):
-                    for container in value_node.value:
-                        environment = _mapping_value(container, "env")
-                        if not isinstance(environment, SequenceNode):
-                            continue
-                        for entry in environment.value:
-                            name_node = _mapping_value(entry, "name")
-                            if not isinstance(name_node, ScalarNode) or not _ENV_NAME_RE.fullmatch(
-                                name_node.value
-                            ):
-                                continue
-                            value = _mapping_value(entry, "value")
-                            digest = _literal_yaml_default(value, (_PLAIN_REFERENCE_RE,))
-                            occurrences.append(
-                                _Occurrence(
-                                    name_node.value,
-                                    _node_location(root, path, name_node),
-                                    digest,
-                                )
-                            )
-                visit(value_node)
-        elif isinstance(node, SequenceNode):
-            for child in node.value:
-                visit(child)
-
-    visit(document)
+    for node in _walk_nodes(document):
+        if not isinstance(node, MappingNode):
+            continue
+        for key_node, value_node in node.value:
+            if (
+                not isinstance(key_node, ScalarNode)
+                or key_node.value not in {"containers", "initContainers"}
+                or not isinstance(value_node, SequenceNode)
+            ):
+                continue
+            for container in value_node.value:
+                environment = _mapping_value(container, "env")
+                if not isinstance(environment, SequenceNode):
+                    continue
+                for entry in environment.value:
+                    name_node = _mapping_value(entry, "name")
+                    if not isinstance(name_node, ScalarNode) or not _ENV_NAME_RE.fullmatch(
+                        name_node.value
+                    ):
+                        continue
+                    value = _mapping_value(entry, "value")
+                    digest = _literal_yaml_default(value, (_PLAIN_REFERENCE_RE,))
+                    occurrences.append(
+                        _Occurrence(
+                            name_node.value,
+                            _node_location(root, path, name_node),
+                            digest,
+                        )
+                    )
     return occurrences
 
 
 def _scan_kubernetes(root: Path, path: Path) -> list[_Occurrence]:
-    text = path.read_text(encoding="utf-8", errors="replace")
-    documents = _yaml_documents(text)
+    text = _read_scan_text(root, path)
+    documents = _yaml_documents(text, path)
     occurrences: list[_Occurrence] = []
     for document in documents:
         occurrences.extend(_container_environment(root, path, document))
@@ -346,27 +383,11 @@ def _scan_kubernetes(root: Path, path: Path) -> list[_Occurrence]:
 
 
 def _scan_workflow(root: Path, path: Path) -> list[_Occurrence]:
-    text = path.read_text(encoding="utf-8", errors="replace")
-    documents = _yaml_documents(text)
+    text = _read_scan_text(root, path)
+    documents = _yaml_documents(text, path)
     occurrences: list[_Occurrence] = []
     for document in documents:
         for node in _walk_nodes(document):
-            if isinstance(node, MappingNode):
-                environment = _mapping_value(node, "env")
-                if isinstance(environment, MappingNode):
-                    for key_node, value_node in environment.value:
-                        if not isinstance(key_node, ScalarNode) or not _ENV_NAME_RE.fullmatch(
-                            key_node.value
-                        ):
-                            continue
-                        digest = _literal_yaml_default(value_node, (_GITHUB_REFERENCE_RE,))
-                        occurrences.append(
-                            _Occurrence(
-                                key_node.value,
-                                _node_location(root, path, key_node),
-                                digest,
-                            )
-                        )
             if isinstance(node, ScalarNode):
                 for match in _GITHUB_REFERENCE_RE.finditer(node.value):
                     occurrences.append(
@@ -396,9 +417,9 @@ def _spring_references_in_node(root: Path, path: Path, document: Node) -> list[_
 
 
 def _scan_spring(root: Path, path: Path) -> list[_Occurrence]:
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = _read_scan_text(root, path)
     if path.suffix.lower() != ".properties":
-        documents = _yaml_documents(text)
+        documents = _yaml_documents(text, path)
         if documents:
             return [
                 occurrence
@@ -459,6 +480,7 @@ def _matches_any(value: str, patterns: Sequence[str]) -> bool:
 
 def _expand_files(root: Path, patterns: Sequence[str], ignored: Sequence[str]) -> list[Path]:
     files: dict[str, Path] = {}
+    resolved_root = root.resolve()
     for pattern in patterns:
         if Path(pattern).is_absolute():
             candidates = [Path(pattern)]
@@ -468,14 +490,26 @@ def _expand_files(root: Path, patterns: Sequence[str], ignored: Sequence[str]) -
             except (OSError, ValueError):
                 continue
         for candidate in candidates:
-            relative = _relative_path(root, candidate)
-            if (
-                relative is None
-                or not candidate.is_file()
-                or _matches_any(relative.as_posix(), ignored)
+            try:
+                lexical_relative = candidate.relative_to(resolved_root)
+            except ValueError:
+                lexical_relative = None
+            if lexical_relative is not None and _matches_any(
+                lexical_relative.as_posix(), ignored
             ):
                 continue
-            files[relative.as_posix()] = candidate
+            if candidate.is_symlink():
+                raise ValueError(f"configured file must not be a symbolic link: {candidate}")
+            try:
+                safe_candidate = contained_path(root, candidate, label="configured file")
+            except ValueError:
+                continue
+            if not safe_candidate.is_file():
+                continue
+            relative = safe_candidate.relative_to(resolved_root)
+            files[relative.as_posix()] = safe_candidate
+            if len(files) > MAX_SCAN_FILES:
+                raise ValueError(f"environment file discovery exceeds {MAX_SCAN_FILES} files")
     return [files[key] for key in sorted(files)]
 
 
@@ -606,8 +640,7 @@ def scan_env_contracts(root: Path, config_mapping: Mapping[str, Any]) -> ScanRes
             )
         )
 
-    result.findings = result.sorted_findings()
-    return result
+    return apply_rule_policy(result, config_mapping)
 
 
 __all__ = ["scan_env_contracts"]

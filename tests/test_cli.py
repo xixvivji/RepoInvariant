@@ -125,3 +125,42 @@ def test_output_and_force_init_refuse_symlinks(tmp_path: Path, capsys) -> None:
     assert main(["check", str(root), "--format", "json", "--output", "report.json"]) == 2
     assert output_target.read_text(encoding="utf-8") == "do not replace\n"
     assert "symbolic link" in capsys.readouterr().err
+
+
+def test_github_actions_feedback_keeps_json_separate_from_commands(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    (tmp_path / ".env.example").write_text("UNUSED=\n", encoding="utf-8")
+    github_output = tmp_path / "github-output"
+    step_summary = tmp_path / "step-summary"
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
+
+    assert main(["check", str(tmp_path), "--format", "json", "--github-actions"]) == 0
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+    assert payload["ok"] is True
+    assert payload["summary"]["warnings"] == 1
+    assert "::warning" in captured.out
+    assert "::" not in captured.err
+    outputs = github_output.read_text(encoding="utf-8")
+    assert "\n0\n" in outputs
+    assert "\n1\n" in outputs
+    assert "\npass\n" in outputs
+    assert "report-path<<" in outputs
+    assert "# RepoInvariant report" in step_summary.read_text(encoding="utf-8")
+
+
+def test_github_actions_feedback_file_error_returns_two(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    github_output = tmp_path / "github-output-directory"
+    github_output.mkdir()
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "step-summary"))
+
+    assert main(["check", str(tmp_path), "--github-actions"]) == 2
+    assert "repoinvariant:" in capsys.readouterr().err

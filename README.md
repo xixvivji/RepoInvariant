@@ -19,7 +19,7 @@ required.
 
 ## Status
 
-RepoInvariant `v0.1.0` is the first public alpha. The configuration and finding codes may change
+RepoInvariant `v0.1.1` is a public alpha. The configuration and finding codes may change
 before `v1.0.0`. Pin an exact commit SHA when using the GitHub Action.
 
 ## Quick start

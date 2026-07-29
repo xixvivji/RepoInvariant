@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-RepoInvariant is pre-alpha. Security fixes are applied to the latest release and the current `main`
-branch until the first stable compatibility policy is published.
+RepoInvariant `0.x` is alpha software. Security fixes are applied to the latest release and the
+current `main` branch until the first stable compatibility policy is published.
 
 ## Reporting a vulnerability
 

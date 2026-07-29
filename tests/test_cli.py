@@ -1,12 +1,12 @@
 import json
 from pathlib import Path
 
-from repotruth.cli import main
+from repoinvariant.cli import main
 
 
 def test_init_creates_config_and_refuses_to_overwrite(tmp_path: Path, capsys) -> None:
     assert main(["init", str(tmp_path)]) == 0
-    config = tmp_path / ".repotruth.yml"
+    config = tmp_path / ".repoinvariant.yml"
     assert config.exists()
 
     assert main(["init", str(tmp_path)]) == 2
@@ -31,7 +31,7 @@ def test_check_returns_one_for_drift(tmp_path: Path, capsys) -> None:
         "services:\n  api:\n    environment:\n      REDIS_URL: ${REDIS_URL}\n",
         encoding="utf-8",
     )
-    (tmp_path / ".repotruth.yml").write_text(
+    (tmp_path / ".repoinvariant.yml").write_text(
         """version: 1
 env:
   contracts: [.env.example]
@@ -95,13 +95,13 @@ def test_output_and_force_init_refuse_symlinks(tmp_path: Path, capsys) -> None:
     outside_config.write_text("do not replace\n", encoding="utf-8")
     root = tmp_path / "repo"
     root.mkdir()
-    (root / ".repotruth.yml").symlink_to(outside_config)
+    (root / ".repoinvariant.yml").symlink_to(outside_config)
 
     assert main(["init", str(root), "--force"]) == 2
     assert outside_config.read_text(encoding="utf-8") == "do not replace\n"
     assert "symbolic link" in capsys.readouterr().err
 
-    (root / ".repotruth.yml").unlink()
+    (root / ".repoinvariant.yml").unlink()
     output_target = tmp_path / "outside.json"
     output_target.write_text("do not replace\n", encoding="utf-8")
     (root / "report.json").symlink_to(output_target)

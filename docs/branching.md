@@ -1,6 +1,6 @@
 # Git Flow
 
-RepoTruth uses a small, reviewable Git Flow model.
+RepoInvariant uses a small, reviewable Git Flow model.
 
 | Branch | Purpose | Merge target |
 |---|---|---|

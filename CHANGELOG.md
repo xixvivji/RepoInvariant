@@ -19,6 +19,8 @@ it reaches `v0.1.0`.
 
 ### Changed
 
+- Renamed the pre-alpha project, package, CLI, configuration file, and Action from `RepoTruth` to
+  `RepoInvariant` before the first public release.
 - Compose contracts now track host-side interpolation sources instead of container target names.
 - GitHub Actions contracts now track `secrets.*` and `vars.*` sources, not literal `env` keys.
 - Empty dotenv assignments are treated as unspecified defaults unless explicitly quoted.

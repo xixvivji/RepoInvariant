@@ -1,14 +1,14 @@
-# Contributing to RepoTruth
+# Contributing to RepoInvariant
 
 Thanks for helping make cross-artifact contracts boring and reliable.
 
 ## Development setup
 
-RepoTruth requires Python 3.11 or newer and uses `uv` for the contributor workflow.
+RepoInvariant requires Python 3.11 or newer and uses `uv` for the contributor workflow.
 
 ```bash
-git clone https://github.com/xixvivji/RepoTruth.git
-cd RepoTruth
+git clone https://github.com/xixvivji/RepoInvariant.git
+cd RepoInvariant
 uv sync --frozen --extra dev
 uv run pytest
 uv run ruff check .
@@ -26,7 +26,7 @@ feature pull requests back into `develop`. Only reviewed `release/*` and `hotfix
 1. Add a minimal fixture that reproduces the drift.
 2. Add or update a deterministic test.
 3. Keep secret values out of fixtures and snapshots.
-4. Run tests, lint, build, and `uv run repotruth check .`.
+4. Run tests, lint, build, and `uv run repoinvariant check .`.
 5. Explain which two or more artifacts disagree and what the expected contract is.
 
 Parser changes should tolerate valid syntax they do not understand. A crash is worse than a

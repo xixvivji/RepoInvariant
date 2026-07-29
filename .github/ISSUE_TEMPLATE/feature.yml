@@ -14,7 +14,7 @@ body:
     id: evidence
     attributes:
       label: Deterministic evidence
-      description: Explain the exact identifiers or values RepoTruth could compare without AI.
+      description: Explain the exact identifiers or values RepoInvariant could compare without AI.
     validations:
       required: true
   - type: textarea

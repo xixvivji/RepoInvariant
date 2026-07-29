@@ -7,7 +7,7 @@ Which artifacts or behavior does this change keep in agreement?
 - [ ] Added or updated a deterministic test with synthetic data
 - [ ] `uv run ruff check .`
 - [ ] `uv run pytest`
-- [ ] `uv run repotruth check . --fail-on warning`
+- [ ] `uv run repoinvariant check . --fail-on warning`
 - [ ] No secrets or private repository content are included
 
 ## Compatibility

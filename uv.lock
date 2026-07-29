@@ -757,7 +757,7 @@ wheels = [
 ]
 
 [[package]]
-name = "repotruth"
+name = "repoinvariant"
 source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },

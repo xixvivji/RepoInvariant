@@ -12,14 +12,14 @@ import yaml
 from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode
 
-from repotruth.filesystem import (
+from repoinvariant.filesystem import (
     MAX_CONFIG_BYTES,
     MAX_SCAN_FILES,
     contained_path,
     read_limited_text,
 )
 
-CONFIG_NAME = ".repotruth.yml"
+CONFIG_NAME = ".repoinvariant.yml"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "version": 1,
@@ -77,7 +77,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
 }
 
-DEFAULT_CONFIG_TEXT = """# RepoTruth compares contracts across files.
+DEFAULT_CONFIG_TEXT = """# RepoInvariant compares contracts across files.
 # Keep the first version intentionally narrow.
 version: 1
 
@@ -131,7 +131,7 @@ features:
   requirements_mode: definitions
   ignore: []
 
-# Downgrade noisy checks while adopting RepoTruth, then tighten them over time.
+# Downgrade noisy checks while adopting RepoInvariant, then tighten them over time.
 rules:
   ENV001: error
   ENV002: warning

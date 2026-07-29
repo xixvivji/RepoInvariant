@@ -1,8 +1,8 @@
-# RepoTruth
+# RepoInvariant
 
 > Pre-alpha: catch contract drift across repository artifacts before merge.
 
-RepoTruth is a deterministic CLI and GitHub Action that checks whether the contracts spread
+RepoInvariant is a deterministic CLI and GitHub Action that checks whether the contracts spread
 across your repository still agree. It focuses on two expensive, repeatable failure modes:
 
 - environment variables drifting between `.env.example`, Docker Compose, Kubernetes,
@@ -14,7 +14,7 @@ required.
 
 ## Status
 
-RepoTruth is under active pre-alpha development. The configuration and finding codes may change
+RepoInvariant is under active pre-alpha development. The configuration and finding codes may change
 before `v0.1.0`. Pin a commit SHA when trying the GitHub Action.
 
 ## Quick start
@@ -22,20 +22,20 @@ before `v0.1.0`. Pin a commit SHA when trying the GitHub Action.
 Install from a local checkout:
 
 ```bash
-git clone https://github.com/xixvivji/RepoTruth.git
-cd RepoTruth
+git clone https://github.com/xixvivji/RepoInvariant.git
+cd RepoInvariant
 uv tool install .
 
 cd /path/to/your/repository
-repotruth init
-repotruth check .
+repoinvariant init
+repoinvariant check .
 ```
 
 During development, use:
 
 ```bash
 uv sync --frozen --extra dev
-uv run repotruth check examples/ticket-service
+uv run repoinvariant check examples/ticket-service
 uv run pytest
 ```
 
@@ -49,7 +49,7 @@ FAIL: 6 files, 2 errors, 0 warnings
 
 ## Configuration
 
-Run `repotruth init` to create `.repotruth.yml`:
+Run `repoinvariant init` to create `.repoinvariant.yml`:
 
 ```yaml
 version: 1
@@ -99,10 +99,10 @@ editing YAML to avoid YAML 1.1 boolean parsing surprises.
 Then run one of the stable report formats:
 
 ```bash
-repotruth check . --format text
-repotruth check . --format json --output repotruth-report.json
-repotruth check . --format markdown --output repotruth-report.md
-repotruth check . --format sarif --output repotruth-report.sarif
+repoinvariant check . --format text
+repoinvariant check . --format json --output repoinvariant-report.json
+repoinvariant check . --format markdown --output repoinvariant-report.md
+repoinvariant check . --format sarif --output repoinvariant-report.sarif
 ```
 
 Exit code `0` means no blocking drift, `1` means a configured contract failed, and `2` means
@@ -110,7 +110,7 @@ the command or configuration was invalid. Add `--fail-on warning` for a stricter
 
 ## GitHub Action
 
-The repository must be checked out before RepoTruth runs. Until the first stable tag, pin an
+The repository must be checked out before RepoInvariant runs. Until the first stable tag, pin an
 exact commit SHA:
 
 ```yaml
@@ -119,11 +119,11 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: xixvivji/RepoTruth@<commit-sha>
+  - uses: xixvivji/RepoInvariant@<commit-sha>
     with:
       path: .
       format: sarif
-      output: repotruth-report.sarif
+      output: repoinvariant-report.sarif
       no-features: "true" # optional during staged adoption
 ```
 
@@ -147,7 +147,7 @@ configuration when only one check needs a temporary downgrade.
 
 ## Design boundaries
 
-RepoTruth deliberately does not:
+RepoInvariant deliberately does not:
 
 - decide whether two differently worded requirements mean the same thing;
 - modify repository files automatically;
@@ -155,9 +155,9 @@ RepoTruth deliberately does not:
 - print secret values found in configuration;
 - claim full OpenAPI, Compose, Kubernetes, or Spring validation.
 
-Use their native validators alongside RepoTruth. RepoTruth owns the gap **between** artifacts.
+Use their native validators alongside RepoInvariant. RepoInvariant owns the gap **between** artifacts.
 
-Configured files and report destinations must stay inside the repository. RepoTruth rejects
+Configured files and report destinations must stay inside the repository. RepoInvariant rejects
 configuration/output symlinks, limits configuration files to 256 KiB and scanned files to 2 MiB,
 and fails closed on malformed configured YAML. Custom requirement patterns run with a timeout and
 one shared matching-time budget. File reads and atomic report writes use no-follow directory

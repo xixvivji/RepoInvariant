@@ -5,7 +5,7 @@ from pathlib import Path
 
 from packaging.version import Version
 
-from repotruth import __version__
+from repoinvariant import __version__
 
 
 def test_package_version_has_one_source_of_truth() -> None:
@@ -14,5 +14,5 @@ def test_package_version_has_one_source_of_truth() -> None:
 
     assert "version" in configuration["project"]["dynamic"]
     assert "version" not in configuration["project"]
-    assert configuration["tool"]["hatch"]["version"]["path"] == "src/repotruth/__init__.py"
+    assert configuration["tool"]["hatch"]["version"]["path"] == "src/repoinvariant/__init__.py"
     assert str(Version(__version__)) == __version__

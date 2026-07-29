@@ -42,7 +42,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from repotruth import __version__
+          from repoinvariant import __version__
 
           expected_tag = f"v{__version__}"
           actual_tag = os.environ["RELEASE_TAG"]
@@ -52,18 +52,18 @@ jobs:
       - name: Lint
         run: uv run --frozen ruff check .
       - name: Test
-        run: uv run --frozen pytest --cov=repotruth --cov-report=term-missing --cov-fail-under=85
+        run: uv run --frozen pytest --cov=repoinvariant --cov-report=term-missing --cov-fail-under=85
       - name: Dogfood
-        run: uv run --frozen repotruth check . --fail-on warning
+        run: uv run --frozen repoinvariant check . --fail-on warning
       - name: Build source distribution and wheel from the source distribution
         run: uv build --no-build-isolation --out-dir dist
       - name: Validate distribution metadata
         run: uv run --frozen twine check --strict dist/*
       - name: Smoke-test the built wheel
         run: |
-          uv venv "$RUNNER_TEMP/repotruth-smoke"
-          uv pip install --python "$RUNNER_TEMP/repotruth-smoke/bin/python" dist/*.whl
-          "$RUNNER_TEMP/repotruth-smoke/bin/repotruth" --version
+          uv venv "$RUNNER_TEMP/repoinvariant-smoke"
+          uv pip install --python "$RUNNER_TEMP/repoinvariant-smoke/bin/python" dist/*.whl
+          "$RUNNER_TEMP/repoinvariant-smoke/bin/repoinvariant" --version
       - name: Upload distributions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -113,7 +113,7 @@ jobs:
     timeout-minutes: 10
     environment:
       name: pypi
-      url: https://pypi.org/p/repotruth
+      url: https://pypi.org/p/repoinvariant
     permissions:
       id-token: write
     steps:
@@ -177,7 +177,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY"
             --verify-tag
             --generate-notes
-            --title "RepoTruth $RELEASE_TAG"
+            --title "RepoInvariant $RELEASE_TAG"
             --draft
           )
           if [[ "$RELEASE_TAG" =~ (a|b|rc|dev)[0-9] ]]; then

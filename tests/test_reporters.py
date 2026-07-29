@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from repotruth.models import Finding, Location, ScanResult, Severity
-from repotruth.reporters import render_json, render_markdown, render_sarif, render_text
+from repoinvariant.models import Finding, Location, ScanResult, Severity
+from repoinvariant.reporters import render_json, render_markdown, render_sarif, render_text
 
 
 def _result() -> ScanResult:
@@ -60,7 +60,7 @@ def test_sarif_report_contains_rule_and_region(tmp_path: Path) -> None:
     run = payload["runs"][0]
 
     assert payload["version"] == "2.1.0"
-    assert run["tool"]["driver"]["name"] == "RepoTruth"
+    assert run["tool"]["driver"]["name"] == "RepoInvariant"
     assert run["results"][0]["ruleId"] == "ENV001"
     assert run["results"][0]["locations"][0]["physicalLocation"]["region"]["startLine"] == 7
 

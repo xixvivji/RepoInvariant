@@ -14,9 +14,9 @@ import regex
 import yaml
 from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
-from repotruth.filesystem import MAX_SCAN_FILES, read_limited_text
-from repotruth.models import Finding, Location, ScanResult, Severity
-from repotruth.policy import apply_rule_policy
+from repoinvariant.filesystem import MAX_SCAN_FILES, read_limited_text
+from repoinvariant.models import Finding, Location, ScanResult, Severity
+from repoinvariant.policy import apply_rule_policy
 
 DEFAULT_ID_PATTERN = r"\bREQ-[A-Z0-9][A-Z0-9-]*\b"
 DEFAULT_OPENAPI_EXTENSION = "x-feature-id"

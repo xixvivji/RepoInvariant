@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from repotruth import __version__
-from repotruth.models import Finding, ScanResult, Severity
+from repoinvariant import __version__
+from repoinvariant.models import Finding, ScanResult, Severity
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -91,7 +91,7 @@ def render_json(
     blocking = result.blocks(fail_on)
     payload = {
         "schema_version": 1,
-        "tool": {"name": "RepoTruth", "version": __version__},
+        "tool": {"name": "RepoInvariant", "version": __version__},
         "ok": not blocking,
         "exit_code": 1 if blocking else 0,
         "blocking_threshold": fail_on.value,
@@ -111,7 +111,7 @@ def render_markdown(
     summary = _summary(result)
     status = "❌ Fail" if result.blocks(fail_on) else "✅ Pass"
     lines = [
-        "# RepoTruth report",
+        "# RepoInvariant report",
         "",
         f"**{status}** — {summary['files']} files, {summary['errors']} errors, "
         f"{summary['warnings']} warnings.",
@@ -176,9 +176,9 @@ def render_sarif(
             {
                 "tool": {
                     "driver": {
-                        "name": "RepoTruth",
+                        "name": "RepoInvariant",
                         "version": __version__,
-                        "informationUri": "https://github.com/xixvivji/RepoTruth",
+                        "informationUri": "https://github.com/xixvivji/RepoInvariant",
                         "rules": [rules[key] for key in sorted(rules)],
                     }
                 },

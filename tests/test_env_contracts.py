@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from repotruth.env_contracts import scan_env_contracts
-from repotruth.models import Severity
+from repoinvariant.env_contracts import scan_env_contracts
+from repoinvariant.models import Severity
 
 FIXTURES = Path(__file__).parent / "fixtures" / "env"
 

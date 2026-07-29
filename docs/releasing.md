@@ -1,15 +1,15 @@
-# Releasing RepoTruth
+# Releasing RepoInvariant
 
 ## One-time PyPI setup
 
-RepoTruth publishes without a long-lived API token. Create a pending GitHub Trusted Publisher at
+RepoInvariant publishes without a long-lived API token. Create a pending GitHub Trusted Publisher at
 <https://pypi.org/manage/account/publishing/> with these exact values:
 
 | Field | Value |
 |---|---|
-| PyPI project name | `repotruth` |
+| PyPI project name | `repoinvariant` |
 | Owner | `xixvivji` |
-| Repository | `RepoTruth` |
+| Repository | `RepoInvariant` |
 | Workflow | `release.yml` |
 | Environment | `pypi` |
 
@@ -19,15 +19,15 @@ eligible reviewer. The release workflow grants `id-token: write` only to the pub
 ## Release checklist
 
 1. Start `release/X.Y.Z` from `develop`.
-2. Set `__version__` in `src/repotruth/__init__.py` to `X.Y.Z` (package metadata reads it).
+2. Set `__version__` in `src/repoinvariant/__init__.py` to `X.Y.Z` (package metadata reads it).
 3. Move the changelog entries from Unreleased to `[X.Y.Z] - YYYY-MM-DD`.
 4. Run:
 
    ```bash
    uv sync --frozen --extra dev
    uv run ruff check .
-   uv run pytest --cov=repotruth --cov-fail-under=85
-   uv run repotruth check . --fail-on warning
+   uv run pytest --cov=repoinvariant --cov-fail-under=85
+   uv run repoinvariant check . --fail-on warning
    uv build --no-build-isolation
    uv run twine check --strict dist/*
    ```
@@ -38,7 +38,7 @@ eligible reviewer. The release workflow grants `id-token: write` only to the pub
    ```bash
    git switch main
    git pull --ff-only
-   git tag -a vX.Y.Z -m "RepoTruth vX.Y.Z"
+   git tag -a vX.Y.Z -m "RepoInvariant vX.Y.Z"
    git push origin vX.Y.Z
    ```
 

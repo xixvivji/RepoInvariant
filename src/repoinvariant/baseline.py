@@ -217,7 +217,7 @@ def _validate_baseline(baseline: Baseline) -> None:
         ):
             raise BaselineError("baseline finding fingerprint must be a lowercase SHA-256 digest")
         if finding.fingerprint in fingerprints:
-            raise BaselineError(f"duplicate baseline fingerprint: {finding.fingerprint}")
+            raise BaselineError("duplicate baseline fingerprint")
         fingerprints.add(finding.fingerprint)
     if list(baseline.findings) != sorted(
         baseline.findings,

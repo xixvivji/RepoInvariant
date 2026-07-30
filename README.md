@@ -8,8 +8,9 @@
 
 > Alpha: catch contract drift across repository artifacts before merge.
 
-> Development branch note: the Java version contract and `no-versions` input documented below are
-> unreleased. They are not included in the PyPI `0.3.0` package or the published `v0.3.0` Action.
+> Development branch note: the Java version contract, `no-versions` input, and `doctor` command
+> documented below are unreleased. They are not included in the PyPI `0.3.0` package or the
+> published `v0.3.0` Action.
 
 RepoInvariant is a deterministic CLI and GitHub Action that checks whether the contracts spread
 across your repository still agree. It focuses on three expensive, repeatable failure modes:
@@ -190,6 +191,41 @@ only when that artifact class must declare the version.
 Each finding code can be set to `error`, `warning`, or `off`. This makes staged adoption explicit:
 start a noisy rule as a warning, reduce the accepted backlog, then promote it to an error. Quote
 `"off"` when editing YAML to avoid YAML 1.1 boolean parsing surprises.
+
+## Diagnose scan scope
+
+Use `doctor` to inspect the effective scan before making `check` a merge gate:
+
+```text
+repoinvariant doctor [path] [--config FILE] [--baseline FILE]
+                       [--format text|json] [--verbose]
+                       [--no-env] [--no-features] [--no-versions]
+```
+
+```bash
+repoinvariant doctor .
+repoinvariant doctor . --verbose
+repoinvariant doctor . --format json
+```
+
+The diagnosis shows scanner state, rule severities (including `off` rules), configured source
+coverage, empty source ranges, ignored-file counts, and optional baseline compatibility. It uses
+the same effective configuration and scanner switches as `check`. The default text and JSON
+outputs report counts and statuses. `--verbose` additionally reports bounded, deterministic,
+repository-relative lists of matched and ignored scan paths. Each collection lists at most 50
+items and the complete report lists at most 1,000; exact counts and omitted counts remain visible.
+
+An ignored file is one that first matched a configured source glob and was then excluded by a
+configured or built-in ignore rule, or identified as a binary traceability input. `doctor` does
+not walk the rest of the repository merely to list files that were never in scan scope. It also
+never prints file contents, discovered secret values, custom identifier matches, or baseline hash
+values.
+
+A completed diagnosis returns exit code `0`, including when a source range is empty, a rule is
+`off`, a scanner is disabled or not configured, or a baseline has a different scan scope. Invalid
+configuration or baseline data and unsafe scanner input return exit code `2`; `doctor` does not
+use exit code `1`. Run `repoinvariant check` for the merge-gate decision and contract-failure exit
+code.
 
 ## Adopt an existing repository
 

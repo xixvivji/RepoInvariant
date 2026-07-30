@@ -17,6 +17,7 @@ from repoinvariant.baseline import (
     render_baseline,
 )
 from repoinvariant.config import CONFIG_NAME, DEFAULT_CONFIG_TEXT, ConfigError, load_config
+from repoinvariant.doctor import build_doctor_report, render_doctor_report
 from repoinvariant.env_contracts import scan_env_contracts
 from repoinvariant.filesystem import atomic_write_text
 from repoinvariant.github_actions import emit_github_feedback
@@ -82,6 +83,32 @@ def build_parser() -> argparse.ArgumentParser:
     baseline.add_argument("--no-env", action="store_true", help="skip environment contracts")
     baseline.add_argument("--no-features", action="store_true", help="skip feature traceability")
     baseline.add_argument("--no-versions", action="store_true", help="skip version contracts")
+
+    doctor = subcommands.add_parser(
+        "doctor",
+        help="explain configured scan ranges, targets, exclusions, and inactive rules",
+    )
+    doctor.add_argument("path", nargs="?", default=".", type=Path, help="repository root")
+    doctor.add_argument("--config", type=Path, help=f"config path (default: {CONFIG_NAME})")
+    doctor.add_argument(
+        "--baseline",
+        type=Path,
+        help="check whether an adoption baseline matches the effective scan scope",
+    )
+    doctor.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        dest="format_name",
+    )
+    doctor.add_argument(
+        "--verbose",
+        action="store_true",
+        help="list bounded, repository-relative patterns and paths",
+    )
+    doctor.add_argument("--no-env", action="store_true", help="skip environment contracts")
+    doctor.add_argument("--no-features", action="store_true", help="skip feature traceability")
+    doctor.add_argument("--no-versions", action="store_true", help="skip version contracts")
 
     init = subcommands.add_parser("init", help=f"create a starter {CONFIG_NAME}")
     init.add_argument("path", nargs="?", default=".", type=Path, help="repository root")
@@ -259,6 +286,31 @@ def _baseline(args: argparse.Namespace) -> int:
     return 0
 
 
+def _doctor(args: argparse.Namespace) -> int:
+    try:
+        root = _resolve_root(args.path)
+        config = load_config(root, args.config)
+        report = build_doctor_report(
+            root,
+            config,
+            config_path=args.config,
+            baseline_path=args.baseline,
+            no_env=args.no_env,
+            no_features=args.no_features,
+            no_versions=args.no_versions,
+            verbose=args.verbose,
+        )
+        rendered = render_doctor_report(report, args.format_name)
+        print(rendered, end="")
+    except BaselineError:
+        _print_error("selected baseline is invalid or unsafe")
+        return 2
+    except (ConfigError, OSError, UnicodeError, ValueError) as exc:
+        _print_error(exc)
+        return 2
+    return 0
+
+
 def _init(args: argparse.Namespace) -> int:
     try:
         root = _resolve_root(args.path, create=True)
@@ -289,6 +341,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _check(args)
     if args.command == "baseline":
         return _baseline(args)
+    if args.command == "doctor":
+        return _doctor(args)
     if args.command == "init":
         return _init(args)
     raise AssertionError(f"unhandled command: {args.command}")

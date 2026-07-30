@@ -6,6 +6,8 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ### Added
 
+- A `doctor` command with text and JSON diagnostics for effective scanner state, rule severity,
+  source coverage, ignored files, empty ranges, and adoption-baseline compatibility.
 - Opt-in Java major-version contracts across Gradle toolchains, Dockerfiles, Compose images,
   `actions/setup-java`, and structured Markdown declarations.
 - `VER001`, `VER002`, and `VER003` findings for mismatches, dynamic declarations, and missing

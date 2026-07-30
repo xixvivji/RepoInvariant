@@ -13,6 +13,7 @@ import yaml
 from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode
 
+from repoinvariant.diagnostics import SourceDiagnostics
 from repoinvariant.filesystem import (
     MAX_CONFIG_BYTES,
     MAX_SCAN_FILES,
@@ -515,7 +516,12 @@ def load_config(root: Path, config_path: Path | None = None) -> dict[str, Any]:
     return config
 
 
-def discover_files(root: Path, patterns: Sequence[str]) -> list[Path]:
+def discover_files(
+    root: Path,
+    patterns: Sequence[str],
+    *,
+    diagnostics: SourceDiagnostics | None = None,
+) -> list[Path]:
     """Expand repository-relative globs and return stable, safe regular files."""
 
     root = root.resolve()
@@ -542,6 +548,10 @@ def discover_files(root: Path, patterns: Sequence[str]) -> list[Path]:
             except (OSError, ValueError):
                 continue
             if any(part in excluded_parts for part in relative.parts):
+                if diagnostics is not None:
+                    safe_candidate = contained_path(root, lexical, label="configured file")
+                    if safe_candidate.is_file():
+                        diagnostics.record_ignored(relative, "built_in_ignore")
                 continue
 
             current = root
@@ -559,6 +569,8 @@ def discover_files(root: Path, patterns: Sequence[str]) -> list[Path]:
                 # Preserve the lexical path so the no-follow reader can catch a symlink swap in
                 # any parent component after discovery.
                 found.add(lexical)
+                if diagnostics is not None:
+                    diagnostics.record_matched(relative)
                 if len(found) > MAX_SCAN_FILES:
                     raise ConfigError(f"file discovery exceeds {MAX_SCAN_FILES} files")
     return sorted(found, key=lambda path: path.relative_to(root).as_posix())

@@ -124,9 +124,14 @@ make it pass.
 
 ## Configuration
 
-Run `repoinvariant init` to create `.repoinvariant.yml`:
+The versioned
+[JSON Schema](https://github.com/xixvivji/RepoInvariant/blob/main/schemas/repoinvariant-config-v1.schema.json)
+provides IDE completion and catches unknown keys, invalid severities, unsafe path patterns, and
+malformed Java contract settings before a scan. `repoinvariant init` creates
+`.repoinvariant.yml` with the YAML Language Server modeline already attached:
 
 ```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/xixvivji/RepoInvariant/main/schemas/repoinvariant-config-v1.schema.json
 version: 1
 
 env:
@@ -154,7 +159,11 @@ versions:
     expected: "21"
     gradle: ["**/build.gradle", "**/build.gradle.kts"]
     dockerfiles: ["**/Dockerfile", "**/Dockerfile.*"]
-    compose: ["**/compose*.yml", "**/compose*.yaml"]
+    compose:
+      - "**/compose*.yml"
+      - "**/compose*.yaml"
+      - "**/docker-compose*.yml"
+      - "**/docker-compose*.yaml"
     workflows: [.github/workflows/*.yml, .github/workflows/*.yaml]
     docs: [README.md, docs/**/*.md]
     ignore: [examples/legacy/**]
@@ -173,9 +182,22 @@ rules:
   VER003: warning
 ```
 
-`requirements_mode: definitions` counts IDs only when they look like canonical Markdown
-definitions (headings, definition lists, and the first column of tables). Set it to `mentions` for
-legacy repositories where any prose reference is authoritative.
+Keep that comment when renaming a custom `--config` file. The Schema describes the user-authored
+configuration before defaults are merged; all sections are optional except that an enabled
+`versions` section requires `java.expected`. A configured list replaces its built-in list instead
+of appending to it, so include every path pattern that must remain in scope.
+
+Schema validation complements the CLI. Duplicate YAML keys, unsupported YAML merge keys (`<<`),
+recursive aliases, file-size and node budgets, Python regular-expression compilation, filesystem
+containment, and symlink checks require runtime context and remain enforced by
+`repoinvariant check` and `repoinvariant doctor`. JSON Schema also treats `1.0` as an integer
+value, while RepoInvariant deliberately accepts only the exact YAML integer `version: 1`. Quote
+values such as `"on"`, `"off"`, `"yes"`, `"no"`, and date-shaped strings when they are intended
+to be ordinary strings so YAML 1.1 and 1.2 tools agree.
+
+`requirements_mode: definitions` counts IDs only in supported canonical Markdown forms: headings,
+leading-ID declarations or list items, leading-pipe table first cells, and setext headings. Set it
+to `mentions` for legacy repositories where any prose reference is authoritative.
 
 The built-in `REQ-*` pattern is printed verbatim because it is a constrained public identifier
 format. Matches from a custom `id_pattern` are reported as deterministic `custom-id-N` labels;
@@ -286,16 +308,21 @@ the command or configuration was invalid. Add `--fail-on warning` for a stricter
 
 | Code | Meaning | Default severity |
 |---|---|---|
-| `ENV001` | A consumer uses an environment variable absent from the contract | error |
-| `ENV002` | A contract variable has no discovered consumer | warning |
-| `ENV003` | Explicit defaults disagree across artifacts | warning |
-| `TRACE001` | A requirement ID is absent from the specification | error |
-| `TRACE002` | A specification ID has no requirement | error |
-| `TRACE003` | A specification ID has no test reference | error |
-| `TRACE004` | A requirement appears to be defined more than once | warning |
-| `VER001` | A static Java declaration differs from `versions.java.expected` | error |
-| `VER002` | A recognized Java declaration is dynamic or ambiguous | warning |
-| `VER003` | A required artifact class has no recognized Java declaration | warning |
+| [`ENV001`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/environment-contracts.md#env001) | A consumer uses an environment variable absent from the contract | error |
+| [`ENV002`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/environment-contracts.md#env002) | A contract variable has no discovered consumer | warning |
+| [`ENV003`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/environment-contracts.md#env003) | Explicit defaults disagree across artifacts | warning |
+| [`TRACE001`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/feature-traceability.md#trace001) | A requirement ID is absent from the specification | error |
+| [`TRACE002`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/feature-traceability.md#trace002) | A specification ID has no requirement | error |
+| [`TRACE003`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/feature-traceability.md#trace003) | A specification ID has no test reference | error |
+| [`TRACE004`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/feature-traceability.md#trace004) | A requirement appears to be defined more than once | warning |
+| [`VER001`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/java-version.md#ver001) | A recognized static Java declaration differs from `versions.java.expected` | error |
+| [`VER002`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/java-version.md#ver002) | A recognized Java declaration cannot resolve to one comparable literal major | warning |
+| [`VER003`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/java-version.md#ver003) | A required source group has no recognized Java declaration | warning |
+
+See the
+[complete rule index](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/README.md)
+for scanner controls, baseline identity, and the exact supported and unsupported syntax for every
+source.
 
 ## Design boundaries
 

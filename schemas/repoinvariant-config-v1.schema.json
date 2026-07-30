@@ -1,0 +1,384 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/xixvivji/RepoInvariant/main/schemas/repoinvariant-config-v1.schema.json",
+  "title": "RepoInvariant configuration",
+  "description": "Configuration for RepoInvariant. An empty object and omitted sections are filled from deterministic defaults. Runtime validation remains authoritative for YAML-only and repository-safety checks.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "description": "RepoInvariant configuration format version.",
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "env": {
+      "$ref": "#/$defs/environment"
+    },
+    "features": {
+      "$ref": "#/$defs/features"
+    },
+    "versions": {
+      "$ref": "#/$defs/versions"
+    },
+    "rules": {
+      "$ref": "#/$defs/rules"
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "stringList": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/nonEmptyString"
+      }
+    },
+    "pathPattern": {
+      "description": "A non-empty repository-relative path or glob. Absolute paths, drive-qualified paths, and parent-directory components are rejected.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "allOf": [
+        {
+          "pattern": "\\S"
+        },
+        {
+          "not": {
+            "pattern": "^(?:\\.[/\\\\])?[/\\\\]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^\\.[/\\\\]$"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^(?:\\.[/\\\\])?[\\s\\S]:[/\\\\]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)"
+          }
+        }
+      ]
+    },
+    "pathPatternList": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/pathPattern"
+      }
+    },
+    "severity": {
+      "description": "Finding severity. The boolean false is accepted because YAML 1.1 parses an unquoted off as false; quoting \"off\" is recommended.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "off"
+          ]
+        },
+        {
+          "const": false
+        }
+      ]
+    },
+    "environment": {
+      "description": "Environment-variable contract sources and consumers. Omitted properties retain their built-in defaults.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contracts": {
+          "description": "Dotenv-style contract files.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            ".env.example"
+          ]
+        },
+        "compose": {
+          "description": "Docker Compose files.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            "compose*.yml",
+            "compose*.yaml",
+            "docker-compose*.yml",
+            "docker-compose*.yaml"
+          ]
+        },
+        "kubernetes": {
+          "description": "Kubernetes manifest files.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            "k8s/**/*.yml",
+            "k8s/**/*.yaml",
+            "kubernetes/**/*.yml",
+            "kubernetes/**/*.yaml"
+          ]
+        },
+        "workflows": {
+          "description": "GitHub Actions workflow files.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            ".github/workflows/*.yml",
+            ".github/workflows/*.yaml"
+          ]
+        },
+        "spring": {
+          "description": "Spring application YAML or properties files.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            "src/main/resources/application*.yml",
+            "src/main/resources/application*.yaml",
+            "src/main/resources/application*.properties"
+          ]
+        },
+        "ignore": {
+          "description": "Environment-variable names or glob-like name patterns excluded from comparison.",
+          "$ref": "#/$defs/stringList",
+          "default": [
+            "CI",
+            "HOME",
+            "PATH",
+            "PWD",
+            "SHELL",
+            "USER",
+            "GH_TOKEN",
+            "GITHUB_*",
+            "RUNNER_*"
+          ]
+        }
+      }
+    },
+    "features": {
+      "description": "Requirement, specification, and test traceability sources. Omitted properties retain their built-in defaults.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requirements": {
+          "description": "Markdown requirement files.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            "docs/**/*.md"
+          ]
+        },
+        "specifications": {
+          "description": "YAML or JSON OpenAPI-like specification files.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            "openapi*.yml",
+            "openapi*.yaml",
+            "openapi*.json",
+            "docs/openapi*.yml",
+            "docs/openapi*.yaml",
+            "docs/openapi*.json"
+          ]
+        },
+        "tests": {
+          "description": "Text test sources searched for requirement identifiers.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            "tests/**/*",
+            "src/test/**/*"
+          ]
+        },
+        "id_pattern": {
+          "description": "Regular expression for requirement identifiers. RepoInvariant compiles this expression with a timeout at runtime.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "default": "\\bREQ-[A-Z0-9][A-Z0-9-]*\\b"
+        },
+        "openapi_extension": {
+          "description": "Specification property whose string or string-list value contains requirement identifiers.",
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$",
+          "default": "x-feature-id"
+        },
+        "requirements_mode": {
+          "description": "definitions counts canonical Markdown definitions; mentions counts every matching prose reference.",
+          "type": "string",
+          "enum": [
+            "definitions",
+            "mentions"
+          ],
+          "default": "definitions"
+        },
+        "ignore": {
+          "description": "Repository-relative feature files excluded after discovery.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": []
+        }
+      }
+    },
+    "versions": {
+      "description": "Opt-in cross-artifact version contracts. If versions is present, a Java contract must be configured.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "java"
+      ],
+      "properties": {
+        "java": {
+          "$ref": "#/$defs/javaVersion"
+        }
+      }
+    },
+    "javaVersion": {
+      "description": "Canonical Java major and the artifact classes compared against it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expected"
+      ],
+      "properties": {
+        "expected": {
+          "description": "Quoted canonical Java major from 1 through 999.",
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,2}$",
+          "examples": [
+            "17",
+            "21"
+          ]
+        },
+        "gradle": {
+          "description": "Gradle Groovy or Kotlin build files.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            "**/build.gradle",
+            "**/build.gradle.kts"
+          ]
+        },
+        "dockerfiles": {
+          "description": "Dockerfiles with recognized Java base images.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            "**/Dockerfile",
+            "**/Dockerfile.*"
+          ]
+        },
+        "compose": {
+          "description": "Compose files with recognized Java service images.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            "**/compose*.yml",
+            "**/compose*.yaml",
+            "**/docker-compose*.yml",
+            "**/docker-compose*.yaml"
+          ]
+        },
+        "workflows": {
+          "description": "GitHub Actions workflows using actions/setup-java.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            ".github/workflows/*.yml",
+            ".github/workflows/*.yaml"
+          ]
+        },
+        "docs": {
+          "description": "Markdown files containing structured Java declarations.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            "README.md",
+            "docs/**/*.md"
+          ]
+        },
+        "ignore": {
+          "description": "Repository-relative version-source files excluded after discovery.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": []
+        },
+        "required": {
+          "description": "Artifact classes that must contain at least one recognized static, dynamic, or ambiguous Java declaration.",
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 5,
+          "default": [],
+          "items": {
+            "type": "string",
+            "enum": [
+              "gradle",
+              "dockerfiles",
+              "compose",
+              "workflows",
+              "docs"
+            ]
+          }
+        }
+      }
+    },
+    "rules": {
+      "description": "Per-finding severity overrides. Omitted rules retain their defaults.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ENV001": {
+          "$ref": "#/$defs/severity",
+          "default": "error"
+        },
+        "ENV002": {
+          "$ref": "#/$defs/severity",
+          "default": "warning"
+        },
+        "ENV003": {
+          "$ref": "#/$defs/severity",
+          "default": "warning"
+        },
+        "TRACE001": {
+          "$ref": "#/$defs/severity",
+          "default": "error"
+        },
+        "TRACE002": {
+          "$ref": "#/$defs/severity",
+          "default": "error"
+        },
+        "TRACE003": {
+          "$ref": "#/$defs/severity",
+          "default": "error"
+        },
+        "TRACE004": {
+          "$ref": "#/$defs/severity",
+          "default": "warning"
+        },
+        "VER001": {
+          "description": "Defaults to error when versions.java is enabled.",
+          "$ref": "#/$defs/severity"
+        },
+        "VER002": {
+          "description": "Defaults to warning when versions.java is enabled.",
+          "$ref": "#/$defs/severity"
+        },
+        "VER003": {
+          "description": "Defaults to warning when versions.java is enabled.",
+          "$ref": "#/$defs/severity"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "version": 1,
+      "versions": {
+        "java": {
+          "expected": "21",
+          "required": [
+            "gradle",
+            "workflows",
+            "docs"
+          ]
+        }
+      },
+      "rules": {
+        "ENV001": "error",
+        "VER003": "warning"
+      }
+    }
+  ]
+}

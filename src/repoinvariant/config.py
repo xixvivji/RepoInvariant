@@ -103,7 +103,8 @@ VERSION_RULE_DEFAULTS: dict[str, str] = {
     "VER003": "warning",
 }
 
-DEFAULT_CONFIG_TEXT = """# RepoInvariant compares contracts across files.
+DEFAULT_CONFIG_TEXT = """# yaml-language-server: $schema=https://raw.githubusercontent.com/xixvivji/RepoInvariant/main/schemas/repoinvariant-config-v1.schema.json
+# RepoInvariant compares contracts across files.
 # Keep the first version intentionally narrow.
 version: 1
 

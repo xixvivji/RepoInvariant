@@ -16,6 +16,10 @@ All notable changes will be documented in this file. The project follows Semanti
 - Offline compatibility fixtures informed by three public repository layouts, with pinned
   source commits, license provenance, and deterministic mutation coverage.
 - A documented security and validation gate for a future explicitly selected parser plugin API.
+- A versioned Draft 2020-12 configuration JSON Schema with strict keys, runtime-aligned defaults,
+  path and severity validation, and a YAML Language Server modeline in generated configurations.
+- Rule-level reference documentation for every environment, traceability, and Java finding,
+  including exact supported syntax, non-detection boundaries, privacy, and baseline identity.
 
 ### Security
 

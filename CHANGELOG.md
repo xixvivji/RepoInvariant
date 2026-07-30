@@ -4,6 +4,26 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in Java major-version contracts across Gradle toolchains, Dockerfiles, Compose images,
+  `actions/setup-java`, and structured Markdown declarations.
+- `VER001`, `VER002`, and `VER003` findings for mismatches, dynamic declarations, and missing
+  required source declarations.
+- A `no-versions` CLI and GitHub Action switch whose state is bound to adoption-baseline scope.
+- Offline compatibility fixtures informed by three public repository layouts, with pinned
+  source commits, license provenance, and deterministic mutation coverage.
+- A documented security and validation gate for a future explicitly selected parser plugin API.
+
+### Security
+
+- Kept version contracts disabled unless explicitly configured, preserving existing v0.3 scan and
+  baseline behavior.
+- Bounded version evidence and repository-contained reads, rejected malformed configured YAML, and
+  omitted unresolved expression contents from findings.
+- Bounded YAML alias traversal, Docker `ARG` expansion, declaration counts, and repeated version
+  file reads; escaped control characters in CLI diagnostics before writing workflow logs.
+
 ## [0.3.0] - 2026-07-29
 
 ### Added

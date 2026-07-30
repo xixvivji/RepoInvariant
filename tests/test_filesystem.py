@@ -36,6 +36,15 @@ def test_parent_directory_symlink_cannot_redirect_read_or_write(tmp_path: Path) 
     assert outside_file.read_text(encoding="utf-8") == "outside\n"
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO files are POSIX-specific")
+def test_read_rejects_fifo_without_waiting_for_a_writer(tmp_path: Path) -> None:
+    fifo = tmp_path / "version.pipe"
+    os.mkfifo(fifo)
+
+    with pytest.raises(ValueError, match="not a regular file"):
+        read_limited_text(fifo, root=tmp_path)
+
+
 def test_atomic_create_preserves_file_created_during_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

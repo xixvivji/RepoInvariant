@@ -15,6 +15,7 @@ MAX_SCAN_FILES = 10_000
 
 _DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 
 def _repository_relative(root: Path, path: Path, *, label: str) -> tuple[Path, Path]:
@@ -59,21 +60,32 @@ def contained_path(
     must_exist: bool = True,
     reject_symlink: bool = True,
 ) -> Path:
-    """Return a resolved path only when it stays inside ``root``."""
+    """Return a lexical absolute path only when it safely stays inside ``root``."""
 
     resolved_root = root.resolve()
     candidate = path if path.is_absolute() else resolved_root / path
-    if reject_symlink and candidate.is_symlink():
-        raise ValueError(f"{label} must not be a symbolic link: {candidate}")
-    if must_exist and not candidate.exists():
+    lexical = Path(os.path.abspath(candidate))
+    try:
+        relative = lexical.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError(f"{label} must stay inside repository root: {candidate}") from exc
+
+    if reject_symlink:
+        current = resolved_root
+        for component in relative.parts:
+            current /= component
+            if current.is_symlink():
+                raise ValueError(f"{label} path must not contain symbolic links: {candidate}")
+    if must_exist and not lexical.exists():
         raise ValueError(f"{label} does not exist: {candidate}")
 
     try:
-        resolved = candidate.resolve(strict=must_exist)
+        resolved = lexical.resolve(strict=must_exist)
         resolved.relative_to(resolved_root)
     except (OSError, ValueError) as exc:
         raise ValueError(f"{label} must stay inside repository root: {candidate}") from exc
-    return resolved
+    # Preserve the lexical path so a descriptor-based consumer can still reject a symlink swap.
+    return lexical
 
 
 def read_limited_text(
@@ -93,7 +105,7 @@ def read_limited_text(
         try:
             file_descriptor = os.open(
                 relative.name,
-                os.O_RDONLY | _NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                os.O_RDONLY | _NOFOLLOW | _NONBLOCK | getattr(os, "O_CLOEXEC", 0),
                 dir_fd=parent_descriptor,
             )
         except OSError as exc:

@@ -36,4 +36,11 @@ Parser changes should tolerate valid syntax they do not understand. A crash is w
 clearly scoped unsupported case. Please avoid semantic or AI-based matching in the deterministic
 core without first discussing the threat model and reproducibility trade-offs in an issue.
 
+Compatibility fixtures are offline structural adaptations, not upstream source snapshots. Update
+one upstream project per pull request, pin a full commit SHA in its `provenance.yml`, review the
+observed path changes, and rewrite only the smallest synthetic form needed for the parser test.
+Do not copy upstream prose, credentials, project data, generated output, or private repository
+content into a fixture. If bytes ever must be vendored, preserve every applicable license and
+NOTICE obligation and call that out explicitly in the pull request.
+
 By submitting a contribution, you agree that it is licensed under Apache-2.0.

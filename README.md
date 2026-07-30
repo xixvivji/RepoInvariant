@@ -8,12 +8,17 @@
 
 > Alpha: catch contract drift across repository artifacts before merge.
 
+> Development branch note: the Java version contract and `no-versions` input documented below are
+> unreleased. They are not included in the PyPI `0.3.0` package or the published `v0.3.0` Action.
+
 RepoInvariant is a deterministic CLI and GitHub Action that checks whether the contracts spread
-across your repository still agree. It focuses on two expensive, repeatable failure modes:
+across your repository still agree. It focuses on three expensive, repeatable failure modes:
 
 - environment variables drifting between `.env.example`, Docker Compose, Kubernetes,
   GitHub Actions, and Spring configuration;
-- requirement IDs disappearing between Markdown, OpenAPI `x-feature-id`, and tests.
+- requirement IDs disappearing between Markdown, OpenAPI `x-feature-id`, and tests;
+- a declared Java major drifting between Gradle toolchains, container images, CI, and
+  structured documentation.
 
 It reports exact evidence instead of guessing intent. No API key, LLM, or source upload is
 required.
@@ -63,6 +68,7 @@ repository contents or require secrets.
 | `fail-on` | `error` | Blocking threshold: `error` or `warning`. |
 | `no-env` | `false` | Skip environment-contract checks. |
 | `no-features` | `false` | Skip feature-traceability checks. |
+| `no-versions` | `false` | Skip configured Java version-contract checks. |
 
 Prefer rule-level severity configuration when only one check needs a temporary downgrade.
 
@@ -141,6 +147,18 @@ features:
   requirements_mode: definitions
   ignore: []
 
+# Optional: omit this section when the repository has no single Java target.
+versions:
+  java:
+    expected: "21"
+    gradle: ["**/build.gradle", "**/build.gradle.kts"]
+    dockerfiles: ["**/Dockerfile", "**/Dockerfile.*"]
+    compose: ["**/compose*.yml", "**/compose*.yaml"]
+    workflows: [.github/workflows/*.yml, .github/workflows/*.yaml]
+    docs: [README.md, docs/**/*.md]
+    ignore: [examples/legacy/**]
+    required: [gradle, workflows, docs]
+
 rules:
   ENV001: error
   ENV002: warning
@@ -149,6 +167,9 @@ rules:
   TRACE002: error
   TRACE003: error
   TRACE004: warning
+  VER001: error
+  VER002: warning
+  VER003: warning
 ```
 
 `requirements_mode: definitions` counts IDs only when they look like canonical Markdown
@@ -160,6 +181,12 @@ format. Matches from a custom `id_pattern` are reported as deterministic `custom
 source locations remain exact, but arbitrary matched repository text never reaches logs or report
 artifacts.
 
+`versions.java.expected` is an opt-in canonical Java major, not an adoption baseline. It must be a
+quoted major such as `"17"` or `"21"`. RepoInvariant recognizes literal Gradle toolchains, known
+Java Docker and Compose image tags, `actions/setup-java`, and structured Markdown declarations.
+Dynamic expressions are reported without printing their contents. Add a source name to `required`
+only when that artifact class must declare the version.
+
 Each finding code can be set to `error`, `warning`, or `off`. This makes staged adoption explicit:
 start a noisy rule as a warning, reduce the accepted backlog, then promote it to an error. Quote
 `"off"` when editing YAML to avoid YAML 1.1 boolean parsing surprises.
@@ -168,7 +195,7 @@ start a noisy rule as a warning, reduce the accepted backlog, then promote it to
 
 ```text
 repoinvariant baseline [path] [--config FILE] [--output FILE] [--force]
-                         [--no-env] [--no-features]
+                         [--no-env] [--no-features] [--no-versions]
 ```
 
 If an established repository already has findings that cannot all be fixed at once, snapshot the
@@ -188,8 +215,9 @@ does not make it new. Resolved entries become non-blocking `stale` entries. Remo
 if an identical violation returns while its stale entry remains, it is still accepted.
 
 The baseline is bound to the effective configuration and enabled scanner set. Use the same
-`--config`, `--no-env`, and `--no-features` options for generation and checking. RepoInvariant
-returns exit code `2` on a scope mismatch instead of silently applying an incompatible baseline.
+`--config`, `--no-env`, `--no-features`, and `--no-versions` options for generation and checking.
+RepoInvariant returns exit code `2` on a scope mismatch instead of silently applying an
+incompatible baseline.
 For the GitHub Action, add the optional input (default: empty):
 
 ```yaml
@@ -229,6 +257,9 @@ the command or configuration was invalid. Add `--fail-on warning` for a stricter
 | `TRACE002` | A specification ID has no requirement | error |
 | `TRACE003` | A specification ID has no test reference | error |
 | `TRACE004` | A requirement appears to be defined more than once | warning |
+| `VER001` | A static Java declaration differs from `versions.java.expected` | error |
+| `VER002` | A recognized Java declaration is dynamic or ambiguous | warning |
+| `VER003` | A required artifact class has no recognized Java declaration | warning |
 
 ## Design boundaries
 
@@ -238,7 +269,9 @@ RepoInvariant deliberately does not:
 - modify repository files automatically;
 - compare live infrastructure or databases;
 - print secret values found in configuration;
-- claim full OpenAPI, Compose, Kubernetes, or Spring validation.
+- claim full OpenAPI, Compose, Kubernetes, or Spring validation;
+- execute Gradle, resolve workflow matrices, or infer Java versions from arbitrary image names and
+  prose.
 
 Use their native validators alongside RepoInvariant. RepoInvariant owns the gap **between** artifacts.
 
@@ -249,16 +282,33 @@ requirement patterns run with a timeout and one shared matching-time budget. Fil
 writes use no-follow directory descriptors so a concurrent symlink swap cannot redirect them
 outside the repository.
 
+## Synthetic compatibility fixtures and parser extensions
+
+Version parsers are exercised offline against small, independently authored fixtures informed by
+file layouts observed in Spring's Docker guide, Apache Fineract, and Testcontainers for Java. Each
+fixture records the upstream repository, immutable commit SHA, license, exact observed paths and
+blob SHAs, and the mapping to its local files; no upstream source or documentation bytes are
+vendored. These fixtures test the local parser model, not byte-for-byte or syntax-level
+compatibility with the referenced projects. See
+[`tests/fixtures/compatibility/THIRD_PARTY_NOTICES.md`](tests/fixtures/compatibility/THIRD_PARTY_NOTICES.md)
+for provenance.
+
+A third-party parser API is intentionally not public yet. Installed Python plugins are executable
+code, so safe activation, bounded repository access, namespaced rules, baseline scope, and failure
+redaction need an explicit contract. The pre-v1 design and completion gate are documented in
+[`docs/parser-plugin-api.md`](docs/parser-plugin-api.md).
+
 ## Roadmap
 
 - [x] Environment contract checks
 - [x] Requirement → OpenAPI → test traceability
 - [x] Text, JSON, Markdown, and SARIF reports
 - [x] Composite GitHub Action
-- [ ] Version-baseline contracts across Gradle, Docker, CI, and documentation
+- [x] Java version contracts across Gradle, Docker, CI, and documentation
 - [ ] Reusable parser plugin API
 - [x] PyPI trusted publishing and provenance-attested release automation
-- [ ] Real-world compatibility fixtures from external projects
+- [ ] Licensed upstream-syntax compatibility snapshots from external projects (pinned synthetic
+      structural fixtures are in place)
 
 See [CONTRIBUTING.md](https://github.com/xixvivji/RepoInvariant/blob/main/CONTRIBUTING.md)
 to help shape future releases. Participation is governed by the

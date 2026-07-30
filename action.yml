@@ -1,5 +1,5 @@
 name: RepoInvariant
-description: Catch environment and feature-traceability contract drift before merge.
+description: Catch environment, traceability, and Java version contract drift before merge.
 author: xixvivji
 
 branding:
@@ -37,6 +37,10 @@ inputs:
     default: "false"
   no-features:
     description: Set to true to skip feature-traceability checks.
+    required: false
+    default: "false"
+  no-versions:
+    description: Set to true to skip Java version-contract checks.
     required: false
     default: "false"
 
@@ -84,6 +88,7 @@ runs:
         REPOINVARIANT_FAIL_ON: ${{ inputs.fail-on }}
         REPOINVARIANT_NO_ENV: ${{ inputs.no-env }}
         REPOINVARIANT_NO_FEATURES: ${{ inputs.no-features }}
+        REPOINVARIANT_NO_VERSIONS: ${{ inputs.no-versions }}
         REPOINVARIANT_ACTION_PATH: ${{ github.action_path }}
       run: |
         set -Eeuo pipefail
@@ -108,6 +113,11 @@ runs:
           true) args+=(--no-features) ;;
           false) ;;
           *) printf 'no-features must be true or false, got %q\n' "$REPOINVARIANT_NO_FEATURES" >&2; exit 2 ;;
+        esac
+        case "$REPOINVARIANT_NO_VERSIONS" in
+          true) args+=(--no-versions) ;;
+          false) ;;
+          *) printf 'no-versions must be true or false, got %q\n' "$REPOINVARIANT_NO_VERSIONS" >&2; exit 2 ;;
         esac
 
         args+=(-- "$REPOINVARIANT_PATH")

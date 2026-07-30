@@ -1,0 +1,35 @@
+fixture: testcontainers-library
+kind: pinned-structural-adaptation
+source:
+  repository: https://github.com/testcontainers/testcontainers-java
+  commit: 2ac3c9773ca52381266463c3709c37155e190b68
+  license: MIT
+copied_bytes: false
+observed_at: "2026-07-30"
+observation_method: github-contents-api-at-pinned-commit
+derivation: independently-authored-structural-adaptation
+observed_paths:
+  - path: README.md
+    blob_sha: 26f45f451e1e095f29c9db5e90b6dcf657390d8b
+  - path: build.gradle
+    blob_sha: f405ea2b92cc2927eb1725faafbd8f0b773abc83
+  - path: core/build.gradle
+    blob_sha: 66f9fe7dcc004c4186ae007631a5154f25c33c97
+  - path: docker-compose.yml
+    blob_sha: bfb6bdc35fe19709c3fd91bf9fccfc035f1c34c0
+  - path: .github/workflows/ci.yml
+    blob_sha: a3b19e818237abd41f0b47e82d6dbabd2a774c66
+adapted_paths:
+  - fixture_path: README.md
+    observed_from: README.md
+  - fixture_path: build.gradle
+    observed_from: build.gradle
+  - fixture_path: modules/core/build.gradle
+    observed_from: core/build.gradle
+  - fixture_path: compose.yaml
+    observed_from: docker-compose.yml
+  - fixture_path: .github/workflows/ci.yml
+    observed_from: .github/workflows/ci.yml
+  - fixture_path: support/Dockerfile
+    synthetic_extension: true
+purpose: Exercise a multi-module library layout with CI, Compose, and support-container additions.

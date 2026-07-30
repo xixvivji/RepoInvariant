@@ -1,0 +1,35 @@
+fixture: fineract-multimodule
+kind: pinned-structural-adaptation
+source:
+  repository: https://github.com/apache/fineract
+  commit: c8b48ee8da3aaa135f7d327bf4e09bfa917e8c13
+  license: Apache-2.0
+copied_bytes: false
+observed_at: "2026-07-30"
+observation_method: github-contents-api-at-pinned-commit
+derivation: independently-authored-structural-adaptation
+observed_paths:
+  - path: README.md
+    blob_sha: 3aa136a9b6136ac9b7b80f2d8a0a960750f7dcf6
+  - path: build.gradle
+    blob_sha: 19eeb7f2ab73fab56ed1bd809db0b6cff1836ebd
+  - path: fineract-core/build.gradle
+    blob_sha: 1a7d533afae4d8f54f2b6e4b4d7fee337afcbb25
+  - path: docker-compose.yml
+    blob_sha: c89fabf4e3ce9961be220445f2827f5dfb7d3a4c
+  - path: .github/workflows/build-quality-checks.yml
+    blob_sha: cead5937de0d17188fe45ee66ed895e9526b1e09
+adapted_paths:
+  - fixture_path: README.md
+    observed_from: README.md
+  - fixture_path: build.gradle
+    observed_from: build.gradle
+  - fixture_path: modules/accounts/build.gradle
+    observed_from: fineract-core/build.gradle
+  - fixture_path: docker-compose.yml
+    observed_from: docker-compose.yml
+  - fixture_path: .github/workflows/ci.yml
+    observed_from: .github/workflows/build-quality-checks.yml
+  - fixture_path: docker/app/Dockerfile
+    synthetic_extension: true
+purpose: Exercise multi-module Gradle, Compose, workflow, container, and documentation paths.

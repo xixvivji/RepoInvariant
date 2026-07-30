@@ -1,0 +1,2 @@
+rootProject.name = 'synthetic-multimodule'
+include 'modules:accounts'

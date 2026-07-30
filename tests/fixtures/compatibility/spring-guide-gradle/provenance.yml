@@ -1,0 +1,29 @@
+fixture: spring-guide-gradle
+kind: pinned-structural-adaptation
+source:
+  repository: https://github.com/spring-guides/gs-spring-boot-docker
+  commit: 8f42f5812e8b62bc31b092a8767a5073bbc786e0
+  license: Apache-2.0
+copied_bytes: false
+observed_at: "2026-07-30"
+observation_method: github-contents-api-at-pinned-commit
+derivation: independently-authored-structural-adaptation
+observed_paths:
+  - path: README.adoc
+    blob_sha: 4df8fc226a9d09df01284d433ce56777b1dc16d2
+  - path: complete/build.gradle
+    blob_sha: 24c9f9f24cbe7c3007c3357cbd5e51f07a8a18a3
+  - path: complete/Dockerfile
+    blob_sha: 509e98b69f819409adfea404348a2a31df842d14
+adapted_paths:
+  - fixture_path: README.md
+    observed_from: README.adoc
+  - fixture_path: build.gradle
+    observed_from: complete/build.gradle
+  - fixture_path: Dockerfile
+    observed_from: complete/Dockerfile
+  - fixture_path: compose.yaml
+    synthetic_extension: true
+  - fixture_path: .github/workflows/ci.yml
+    synthetic_extension: true
+purpose: Exercise a compact guide layout plus explicit cross-artifact Java declarations.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -77,6 +78,30 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
 }
 
+# Optional scanners deliberately live outside ``DEFAULT_CONFIG``.  Adding them there would
+# change the effective configuration (and therefore adoption-baseline scope digests) for every
+# existing v0.3 repository, even when the scanner is not configured.
+VERSION_JAVA_DEFAULTS: dict[str, Any] = {
+    "gradle": ["**/build.gradle", "**/build.gradle.kts"],
+    "dockerfiles": ["**/Dockerfile", "**/Dockerfile.*"],
+    "compose": [
+        "**/compose*.yml",
+        "**/compose*.yaml",
+        "**/docker-compose*.yml",
+        "**/docker-compose*.yaml",
+    ],
+    "workflows": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
+    "docs": ["README.md", "docs/**/*.md"],
+    "ignore": [],
+    "required": [],
+}
+
+VERSION_RULE_DEFAULTS: dict[str, str] = {
+    "VER001": "error",
+    "VER002": "warning",
+    "VER003": "warning",
+}
+
 DEFAULT_CONFIG_TEXT = """# RepoInvariant compares contracts across files.
 # Keep the first version intentionally narrow.
 version: 1
@@ -140,6 +165,13 @@ rules:
   TRACE002: error
   TRACE003: error
   TRACE004: warning
+
+# Opt in to a Java major-version contract when the repository has one canonical target:
+# versions:
+#   java:
+#     expected: "21"
+#     required: [gradle, workflows, docs]
+# VER001/VER002/VER003 use error/warning/warning defaults when this section is enabled.
 """
 
 
@@ -147,7 +179,7 @@ class ConfigError(ValueError):
     """Raised when a repository configuration cannot be interpreted safely."""
 
 
-_TOP_LEVEL_KEYS = frozenset({"version", "env", "features", "rules"})
+_TOP_LEVEL_KEYS = frozenset({"version", "env", "features", "versions", "rules"})
 _ENV_KEYS = frozenset({"contracts", "compose", "kubernetes", "workflows", "spring", "ignore"})
 _FEATURE_KEYS = frozenset(
     {
@@ -160,8 +192,34 @@ _FEATURE_KEYS = frozenset(
         "ignore",
     }
 )
+_VERSION_KEYS = frozenset({"java"})
+_JAVA_VERSION_KEYS = frozenset(
+    {
+        "expected",
+        "gradle",
+        "dockerfiles",
+        "compose",
+        "workflows",
+        "docs",
+        "ignore",
+        "required",
+    }
+)
+_VERSION_SOURCES = frozenset({"gradle", "dockerfiles", "compose", "workflows", "docs"})
+_JAVA_MAJOR_RE = re.compile(r"^(?:[1-9][0-9]{0,2})$", re.ASCII)
 _RULE_KEYS = frozenset(
-    {"ENV001", "ENV002", "ENV003", "TRACE001", "TRACE002", "TRACE003", "TRACE004"}
+    {
+        "ENV001",
+        "ENV002",
+        "ENV003",
+        "TRACE001",
+        "TRACE002",
+        "TRACE003",
+        "TRACE004",
+        "VER001",
+        "VER002",
+        "VER003",
+    }
 )
 _RULE_VALUES = frozenset({"error", "warning", "off"})
 _OPENAPI_EXTENSION_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$", re.ASCII)
@@ -207,14 +265,40 @@ _UniqueKeyLoader.add_constructor(
 )
 
 
-def _merge(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+def _merge(
+    base: dict[str, Any],
+    override: Mapping[str, Any],
+    *,
+    memo: dict[int, Any] | None = None,
+) -> dict[str, Any]:
+    memo = memo if memo is not None else {}
     result = deepcopy(base)
     for key, value in override.items():
         if isinstance(value, Mapping) and isinstance(result.get(key), dict):
-            result[key] = _merge(result[key], value)
+            result[key] = _merge(result[key], value, memo=memo)
         else:
-            result[key] = deepcopy(value)
+            result[key] = deepcopy(value, memo)
     return result
+
+
+def apply_optional_defaults(config: dict[str, Any]) -> dict[str, Any]:
+    """Fill defaults for explicitly enabled scanners without enabling them implicitly."""
+
+    versions = config.get("versions")
+    if not isinstance(versions, Mapping):
+        return config
+    java = versions.get("java")
+    if not isinstance(java, Mapping):
+        return config
+
+    expanded_versions = dict(versions)
+    expanded_versions["java"] = _merge(VERSION_JAVA_DEFAULTS, java)
+    config["versions"] = expanded_versions
+    rules = config.get("rules")
+    if isinstance(rules, dict):
+        for code, severity in VERSION_RULE_DEFAULTS.items():
+            rules.setdefault(code, severity)
+    return config
 
 
 def _normalize_yaml_scalars(config: dict[str, Any]) -> None:
@@ -232,10 +316,15 @@ def _validate_structure(
     *,
     seen: set[int] | None = None,
     active: set[int] | None = None,
+    budget: list[int] | None = None,
     depth: int = 0,
 ) -> None:
     """Reject recursive or excessively nested YAML before merging defaults."""
 
+    budget = budget if budget is not None else [0]
+    budget[0] += 1
+    if budget[0] > 20_000:
+        raise ConfigError("configuration contains too many nodes or alias references")
     if depth > 64:
         raise ConfigError("configuration nesting exceeds 64 levels")
     if not isinstance(value, (Mapping, list)):
@@ -247,14 +336,18 @@ def _validate_structure(
         raise ConfigError("configuration must not contain recursive YAML aliases")
     if identity in seen:
         return
-    if len(seen) > 20_000:
-        raise ConfigError("configuration contains too many nodes")
     seen.add(identity)
     active.add(identity)
     try:
         children = (*value.keys(), *value.values()) if isinstance(value, Mapping) else value
         for child in children:
-            _validate_structure(child, seen=seen, active=active, depth=depth + 1)
+            _validate_structure(
+                child,
+                seen=seen,
+                active=active,
+                budget=budget,
+                depth=depth + 1,
+            )
     finally:
         active.remove(identity)
 
@@ -276,6 +369,22 @@ def _reject_unknown_keys(section: Mapping[str, Any], allowed: frozenset[str], la
     )
     if unknown:
         raise ConfigError(f"unknown {label} key(s): {', '.join(map(repr, unknown))}")
+
+
+def _preflight_override_keys(config: Mapping[str, Any]) -> None:
+    """Reject unknown YAML branches before a memo-breaking defaults merge."""
+
+    _reject_unknown_keys(config, _TOP_LEVEL_KEYS, "top-level")
+    for name, allowed in (("env", _ENV_KEYS), ("features", _FEATURE_KEYS), ("rules", _RULE_KEYS)):
+        section = config.get(name)
+        if isinstance(section, Mapping):
+            _reject_unknown_keys(section, allowed, name)
+    versions = config.get("versions")
+    if isinstance(versions, Mapping):
+        _reject_unknown_keys(versions, _VERSION_KEYS, "versions")
+        java = versions.get("java")
+        if isinstance(java, Mapping):
+            _reject_unknown_keys(java, _JAVA_VERSION_KEYS, "versions.java")
 
 
 def _validate_relative_pattern(pattern: str, label: str) -> None:
@@ -325,6 +434,38 @@ def validate_config(config: Mapping[str, Any]) -> None:
     if features.get("requirements_mode") not in {"definitions", "mentions"}:
         raise ConfigError("'features.requirements_mode' must be 'definitions' or 'mentions'")
 
+    if "versions" in config:
+        versions = config["versions"]
+        if not isinstance(versions, Mapping):
+            raise ConfigError("'versions' must be a mapping")
+        _reject_unknown_keys(versions, _VERSION_KEYS, "versions")
+        java = versions.get("java")
+        if not isinstance(java, Mapping):
+            raise ConfigError("'versions.java' must be a mapping")
+        _reject_unknown_keys(java, _JAVA_VERSION_KEYS, "versions.java")
+
+        expected = java.get("expected")
+        if not isinstance(expected, str) or not _JAVA_MAJOR_RE.fullmatch(expected):
+            raise ConfigError(
+                "'versions.java.expected' must be a quoted canonical major from '1' to '999'"
+        )
+        for key in ("gradle", "dockerfiles", "compose", "workflows", "docs", "ignore"):
+            _string_list(java, key)
+            for pattern in java.get(key, []):
+                _validate_relative_pattern(pattern, f"versions.java.{key}")
+
+        required = java.get("required", [])
+        if not isinstance(required, list) or not all(isinstance(item, str) for item in required):
+            raise ConfigError("'versions.java.required' must be a list of source names")
+        if len(required) != len(set(required)):
+            raise ConfigError("'versions.java.required' must not contain duplicate source names")
+        unknown_sources = sorted(set(required) - _VERSION_SOURCES)
+        if unknown_sources:
+            raise ConfigError(
+                "'versions.java.required' contains unknown source(s): "
+                + ", ".join(map(repr, unknown_sources))
+            )
+
     for section_name, keys in _PATH_LISTS.items():
         section = env if section_name == "env" else features
         for key in keys:
@@ -364,8 +505,9 @@ def load_config(root: Path, config_path: Path | None = None) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise ConfigError(f"{path} must contain a YAML mapping")
     _validate_structure(raw)
+    _preflight_override_keys(raw)
     try:
-        config = _merge(DEFAULT_CONFIG, raw)
+        config = apply_optional_defaults(_merge(DEFAULT_CONFIG, raw))
     except RecursionError as exc:
         raise ConfigError("configuration nesting is too deep") from exc
     _normalize_yaml_scalars(config)
@@ -394,16 +536,29 @@ def discover_files(root: Path, patterns: Sequence[str]) -> list[Path]:
         except (OSError, ValueError, NotImplementedError) as exc:
             raise ConfigError(f"invalid path pattern {pattern!r}: {exc}") from exc
         for candidate in candidates:
-            if candidate.is_symlink():
-                raise ConfigError(f"configured file must not be a symbolic link: {candidate}")
             try:
-                relative = candidate.resolve().relative_to(root)
+                lexical = Path(os.path.abspath(candidate))
+                relative = lexical.relative_to(root)
             except (OSError, ValueError):
                 continue
             if any(part in excluded_parts for part in relative.parts):
                 continue
-            if candidate.is_file():
-                found.add(candidate.resolve())
+
+            current = root
+            for component in relative.parts:
+                current /= component
+                if current.is_symlink():
+                    raise ConfigError(
+                        f"configured file path must not contain symbolic links: {candidate}"
+                    )
+            try:
+                lexical.resolve(strict=True).relative_to(root)
+            except (OSError, ValueError):
+                continue
+            if lexical.is_file():
+                # Preserve the lexical path so the no-follow reader can catch a symlink swap in
+                # any parent component after discovery.
+                found.add(lexical)
                 if len(found) > MAX_SCAN_FILES:
                     raise ConfigError(f"file discovery exceeds {MAX_SCAN_FILES} files")
     return sorted(found, key=lambda path: path.relative_to(root).as_posix())

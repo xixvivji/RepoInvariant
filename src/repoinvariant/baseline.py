@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from repoinvariant import __version__
-from repoinvariant.config import DEFAULT_CONFIG, ConfigError, validate_config
+from repoinvariant.config import (
+    DEFAULT_CONFIG,
+    ConfigError,
+    apply_optional_defaults,
+    validate_config,
+)
 from repoinvariant.filesystem import MAX_SCAN_BYTES, read_limited_text
 from repoinvariant.models import Finding, ScanResult, Severity
 
@@ -97,10 +102,14 @@ def _sha256(value: str) -> str:
 
 
 def _merge_defaults(
-    base: Mapping[str, Any], override: Mapping[str, Any], depth: int = 0
+    base: Mapping[str, Any],
+    override: Mapping[str, Any],
+    depth: int = 0,
+    memo: dict[int, Any] | None = None,
 ) -> dict[str, Any]:
     if depth > 64:
         raise BaselineError("configuration nesting exceeds 64 levels")
+    memo = memo if memo is not None else {}
     try:
         result = deepcopy(dict(base))
     except (TypeError, ValueError, RecursionError) as exc:
@@ -108,10 +117,10 @@ def _merge_defaults(
     for key, value in override.items():
         existing = result.get(key)
         if isinstance(existing, Mapping) and isinstance(value, Mapping):
-            result[key] = _merge_defaults(existing, value, depth + 1)
+            result[key] = _merge_defaults(existing, value, depth + 1, memo)
         else:
             try:
-                result[key] = deepcopy(value)
+                result[key] = deepcopy(value, memo)
             except (TypeError, ValueError, RecursionError) as exc:
                 raise BaselineError(f"configuration cannot be copied safely: {exc}") from exc
     return result
@@ -121,7 +130,7 @@ def _effective_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(config, Mapping):
         raise BaselineError("configuration must be a mapping")
     try:
-        effective = _merge_defaults(DEFAULT_CONFIG, config)
+        effective = apply_optional_defaults(_merge_defaults(DEFAULT_CONFIG, config))
         validate_config(effective)
     except (ConfigError, RecursionError) as exc:
         raise BaselineError(f"invalid effective configuration: {exc}") from exc
@@ -133,18 +142,24 @@ def compute_scope_digest(
     *,
     no_env: bool = False,
     no_features: bool = False,
+    no_versions: bool = False,
 ) -> str:
     """Hash the effective scan configuration and enabled scanner set."""
 
-    if type(no_env) is not bool or type(no_features) is not bool:
+    if any(type(flag) is not bool for flag in (no_env, no_features, no_versions)):
         raise BaselineError("scanner selection flags must be booleans")
+    effective = _effective_config(config)
+    enabled_scanners = [
+        name
+        for name, disabled in (("env", no_env), ("features", no_features))
+        if not disabled
+    ]
+    versions = effective.get("versions")
+    if isinstance(versions, Mapping) and "java" in versions and not no_versions:
+        enabled_scanners.append("versions")
     payload = {
-        "config": _effective_config(config),
-        "enabled_scanners": [
-            name
-            for name, disabled in (("env", no_env), ("features", no_features))
-            if not disabled
-        ],
+        "config": effective,
+        "enabled_scanners": enabled_scanners,
         "fingerprint_version": FINGERPRINT_VERSION,
     }
     return _sha256(_canonical_json(payload))
@@ -217,6 +232,7 @@ def create_baseline(
     *,
     no_env: bool = False,
     no_features: bool = False,
+    no_versions: bool = False,
     tool_version: str = __version__,
 ) -> Baseline:
     """Create a baseline from matchable findings without retaining finding payloads."""
@@ -245,6 +261,7 @@ def create_baseline(
             config,
             no_env=no_env,
             no_features=no_features,
+            no_versions=no_versions,
         ),
         findings=tuple(entries),
     )
@@ -392,6 +409,7 @@ def apply_baseline(
     *,
     no_env: bool = False,
     no_features: bool = False,
+    no_versions: bool = False,
 ) -> BaselineApplication:
     """Suppress matching accepted findings while leaving the source result unchanged."""
 
@@ -400,6 +418,7 @@ def apply_baseline(
         config,
         no_env=no_env,
         no_features=no_features,
+        no_versions=no_versions,
     )
     if not hmac.compare_digest(baseline.scope_digest, expected_scope):
         raise BaselineError(

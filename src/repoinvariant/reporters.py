@@ -30,7 +30,7 @@ def _summary(result: ScanResult) -> dict[str, int]:
     }
 
 
-def _display(value: str) -> str:
+def safe_console_text(value: str) -> str:
     """Keep terminal and Markdown reports on one inert physical line."""
 
     escaped: list[str] = []
@@ -50,6 +50,10 @@ def _display(value: str) -> str:
             escaped.append(character)
     result = "".join(escaped)
     return f"./{result}" if result.startswith("::") else result
+
+
+def _display(value: str) -> str:
+    return safe_console_text(value)
 
 
 def render_text(

@@ -21,10 +21,15 @@ from repoinvariant.env_contracts import scan_env_contracts
 from repoinvariant.filesystem import atomic_write_text
 from repoinvariant.github_actions import emit_github_feedback
 from repoinvariant.models import ScanResult, Severity
-from repoinvariant.reporters import render
+from repoinvariant.reporters import render, safe_console_text
 from repoinvariant.traceability import scan_traceability
+from repoinvariant.version_contracts import scan_version_contracts
 
 BASELINE_NAME = ".repoinvariant-baseline.json"
+
+
+def _print_error(error: object) -> None:
+    print(f"repoinvariant: {safe_console_text(str(error))}", file=sys.stderr)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument("--no-env", action="store_true", help="skip environment contracts")
     check.add_argument("--no-features", action="store_true", help="skip feature traceability")
+    check.add_argument("--no-versions", action="store_true", help="skip version contracts")
     check.add_argument(
         "--baseline",
         type=Path,
@@ -75,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     baseline.add_argument("--force", action="store_true", help="replace an existing baseline")
     baseline.add_argument("--no-env", action="store_true", help="skip environment contracts")
     baseline.add_argument("--no-features", action="store_true", help="skip feature traceability")
+    baseline.add_argument("--no-versions", action="store_true", help="skip version contracts")
 
     init = subcommands.add_parser("init", help=f"create a starter {CONFIG_NAME}")
     init.add_argument("path", nargs="?", default=".", type=Path, help="repository root")
@@ -119,12 +126,15 @@ def _scan(
     *,
     no_env: bool,
     no_features: bool,
+    no_versions: bool,
 ) -> ScanResult:
     result = ScanResult()
     if not no_env:
         result.extend(scan_env_contracts(root, config))
     if not no_features:
         result.extend(scan_traceability(root, config))
+    if not no_versions:
+        result.extend(scan_version_contracts(root, config))
     return result
 
 
@@ -143,6 +153,7 @@ def _check(args: argparse.Namespace) -> int:
             config,
             no_env=args.no_env,
             no_features=args.no_features,
+            no_versions=args.no_versions,
         )
         if args.baseline:
             application = apply_baseline(
@@ -151,6 +162,7 @@ def _check(args: argparse.Namespace) -> int:
                 config,
                 no_env=args.no_env,
                 no_features=args.no_features,
+                no_versions=args.no_versions,
             )
             result = application.result
             baseline_counts = (application.suppressed_count, application.stale_count)
@@ -168,7 +180,7 @@ def _check(args: argparse.Namespace) -> int:
                         file=sys.stderr,
                     )
     except (BaselineError, ConfigError, OSError, UnicodeError, ValueError) as exc:
-        print(f"repoinvariant: {exc}", file=sys.stderr)
+        _print_error(exc)
         return 2
 
     fail_on = Severity(args.fail_on)
@@ -177,7 +189,10 @@ def _check(args: argparse.Namespace) -> int:
     try:
         if args.output:
             output = atomic_write_text(root, args.output, report, label="report output")
-            print(f"RepoInvariant report written to {output}", file=sys.stderr)
+            print(
+                f"RepoInvariant report written to {safe_console_text(str(output))}",
+                file=sys.stderr,
+            )
         else:
             destination = sys.stderr if args.github_actions else sys.stdout
             print(report, end="", file=destination)
@@ -190,7 +205,7 @@ def _check(args: argparse.Namespace) -> int:
                 )
             emit_github_feedback(result, root, fail_on, output)
     except (OSError, UnicodeError, ValueError) as exc:
-        print(f"repoinvariant: {exc}", file=sys.stderr)
+        _print_error(exc)
         return 2
 
     return 1 if result.blocks(fail_on) else 0
@@ -213,12 +228,14 @@ def _baseline(args: argparse.Namespace) -> int:
             config,
             no_env=args.no_env,
             no_features=args.no_features,
+            no_versions=args.no_versions,
         )
         baseline = create_baseline(
             result,
             config,
             no_env=args.no_env,
             no_features=args.no_features,
+            no_versions=args.no_versions,
         )
         output = atomic_write_text(
             root,
@@ -228,9 +245,12 @@ def _baseline(args: argparse.Namespace) -> int:
             overwrite=args.force,
         )
     except (BaselineError, ConfigError, OSError, UnicodeError, ValueError) as exc:
-        print(f"repoinvariant: {exc}", file=sys.stderr)
+        _print_error(exc)
         return 2
-    print(f"Created {output} with {len(baseline.findings)} accepted finding(s).")
+    print(
+        f"Created {safe_console_text(str(output))} with "
+        f"{len(baseline.findings)} accepted finding(s)."
+    )
     print(
         "Warning: this baseline suppresses matching findings. Generate or update it only "
         "from a trusted base branch, and review every baseline change.",
@@ -243,21 +263,23 @@ def _init(args: argparse.Namespace) -> int:
     try:
         root = _resolve_root(args.path, create=True)
     except ValueError as exc:
-        print(f"repoinvariant: {exc}", file=sys.stderr)
+        _print_error(exc)
         return 2
     destination = root / CONFIG_NAME
     if (destination.exists() or destination.is_symlink()) and not args.force:
         print(
-            f"repoinvariant: {destination} already exists (use --force to replace it)",
+            "repoinvariant: "
+            f"{safe_console_text(str(destination))} already exists "
+            "(use --force to replace it)",
             file=sys.stderr,
         )
         return 2
     try:
         atomic_write_text(root, destination, DEFAULT_CONFIG_TEXT, label="configuration file")
     except (OSError, UnicodeError, ValueError) as exc:
-        print(f"repoinvariant: {exc}", file=sys.stderr)
+        _print_error(exc)
         return 2
-    print(f"Created {destination}")
+    print(f"Created {safe_console_text(str(destination))}")
     return 0
 
 

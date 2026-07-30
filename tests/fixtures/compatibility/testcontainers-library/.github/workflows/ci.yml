@@ -1,0 +1,14 @@
+name: Compatibility fixture
+
+on:
+  push:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@7a445ee88d4e23b52c33b35957b450061bc5e8c9 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: java --version

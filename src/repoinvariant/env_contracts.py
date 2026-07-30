@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
+from repoinvariant.diagnostics import ScannerDiagnostics, SourceDiagnostics
 from repoinvariant.filesystem import (
     MAX_SCAN_BYTES,
     MAX_SCAN_FILES,
@@ -301,6 +302,7 @@ def _scan_compose(
     path: Path,
     result: ScanResult,
     ignored_paths: Sequence[str],
+    diagnostics: SourceDiagnostics | None = None,
 ) -> list[_Occurrence]:
     text = _read_scan_text(root, path)
     documents = _yaml_documents(text, path)
@@ -318,13 +320,17 @@ def _scan_compose(
                 label="Compose env_file",
             )
         except ValueError as exc:
-            raise ValueError(
-                f"Compose env_file must stay inside the repository: {reference}"
-            ) from exc
+            raise ValueError("Compose env_file must stay inside the repository") from exc
         relative = candidate.relative_to(root.resolve())
-        if not candidate.is_file() or _matches_any(relative.as_posix(), ignored_paths):
+        if not candidate.is_file():
+            continue
+        if _matches_any(relative.as_posix(), ignored_paths):
+            if diagnostics is not None:
+                diagnostics.record_ignored(relative, "configured_ignore")
             continue
         result.scanned_files.add(relative)
+        if diagnostics is not None:
+            diagnostics.record_derived(relative)
         occurrences.extend(_parse_dotenv(root, candidate))
     return occurrences
 
@@ -478,7 +484,12 @@ def _matches_any(value: str, patterns: Sequence[str]) -> bool:
     )
 
 
-def _expand_files(root: Path, patterns: Sequence[str], ignored: Sequence[str]) -> list[Path]:
+def _expand_files(
+    root: Path,
+    patterns: Sequence[str],
+    ignored: Sequence[str],
+    diagnostics: SourceDiagnostics | None = None,
+) -> list[Path]:
     files: dict[str, Path] = {}
     resolved_root = root.resolve()
     for pattern in patterns:
@@ -486,7 +497,7 @@ def _expand_files(root: Path, patterns: Sequence[str], ignored: Sequence[str]) -
             candidates = [Path(pattern)]
         else:
             try:
-                candidates = list(root.glob(pattern))
+                candidates = root.glob(pattern)
             except (OSError, ValueError):
                 continue
         for candidate in candidates:
@@ -497,17 +508,31 @@ def _expand_files(root: Path, patterns: Sequence[str], ignored: Sequence[str]) -
             if lexical_relative is not None and _matches_any(
                 lexical_relative.as_posix(), ignored
             ):
+                if diagnostics is not None:
+                    try:
+                        safe_candidate = contained_path(root, candidate, label="configured file")
+                    except ValueError as exc:
+                        raise ValueError(
+                            "configured environment file path is unsafe"
+                        ) from exc
+                    if safe_candidate.is_file():
+                        diagnostics.record_ignored(
+                            safe_candidate.relative_to(resolved_root),
+                            "configured_ignore",
+                        )
                 continue
             if candidate.is_symlink():
                 raise ValueError(f"configured file must not be a symbolic link: {candidate}")
             try:
                 safe_candidate = contained_path(root, candidate, label="configured file")
-            except ValueError:
-                continue
+            except ValueError as exc:
+                raise ValueError("configured environment file path is unsafe") from exc
             if not safe_candidate.is_file():
                 continue
             relative = safe_candidate.relative_to(resolved_root)
             files[relative.as_posix()] = safe_candidate
+            if diagnostics is not None:
+                diagnostics.record_matched(relative)
             if len(files) > MAX_SCAN_FILES:
                 raise ValueError(f"environment file discovery exceeds {MAX_SCAN_FILES} files")
     return [files[key] for key in sorted(files)]
@@ -539,7 +564,12 @@ def _locations(occurrences: Iterable[_Occurrence]) -> list[Location]:
     return [unique[key] for key in sorted(unique)]
 
 
-def scan_env_contracts(root: Path, config_mapping: Mapping[str, Any]) -> ScanResult:
+def scan_env_contracts(
+    root: Path,
+    config_mapping: Mapping[str, Any],
+    *,
+    diagnostics: ScannerDiagnostics | None = None,
+) -> ScanResult:
     """Scan configured environment contracts and consumers below ``root``.
 
     ``config_mapping`` accepts either an ``env`` mapping or that mapping directly. The
@@ -556,9 +586,11 @@ def scan_env_contracts(root: Path, config_mapping: Mapping[str, Any]) -> ScanRes
     contracts: list[_Occurrence] = []
     consumers: list[_Occurrence] = []
 
-    contract_paths = _expand_files(
-        root, _config_patterns(config_mapping, section, "contracts"), ignored
+    contract_patterns = _config_patterns(config_mapping, section, "contracts")
+    contract_diagnostics = (
+        diagnostics.source("contracts", contract_patterns) if diagnostics is not None else None
     )
+    contract_paths = _expand_files(root, contract_patterns, ignored, contract_diagnostics)
     for path in contract_paths:
         relative = _relative_path(root, path)
         if relative is not None:
@@ -566,20 +598,27 @@ def scan_env_contracts(root: Path, config_mapping: Mapping[str, Any]) -> ScanRes
         contracts.extend(_parse_dotenv(root, path))
 
     scanners = {
-        "compose": lambda path: _scan_compose(root, path, result, ignored),
+        "compose": lambda path, source_diagnostics: _scan_compose(
+            root, path, result, ignored, source_diagnostics
+        ),
         "kubernetes": lambda path: _scan_kubernetes(root, path),
         "workflows": lambda path: _scan_workflow(root, path),
         "spring": lambda path: _scan_spring(root, path),
     }
     for scanner_name, scanner in scanners.items():
-        paths = _expand_files(
-            root, _config_patterns(config_mapping, section, scanner_name), ignored
+        patterns = _config_patterns(config_mapping, section, scanner_name)
+        source_diagnostics = (
+            diagnostics.source(scanner_name, patterns) if diagnostics is not None else None
         )
+        paths = _expand_files(root, patterns, ignored, source_diagnostics)
         for path in paths:
             relative = _relative_path(root, path)
             if relative is not None:
                 result.scanned_files.add(relative)
-            consumers.extend(scanner(path))
+            if scanner_name == "compose":
+                consumers.extend(scanner(path, source_diagnostics))
+            else:
+                consumers.extend(scanner(path))
 
     contracts = _deduplicate(
         occurrence for occurrence in contracts if not _matches_any(occurrence.name, ignored)

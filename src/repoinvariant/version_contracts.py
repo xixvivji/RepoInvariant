@@ -14,6 +14,7 @@ import yaml
 from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
 from repoinvariant.config import VERSION_JAVA_DEFAULTS, discover_files
+from repoinvariant.diagnostics import ScannerDiagnostics, SourceDiagnostics
 from repoinvariant.filesystem import (
     MAX_SCAN_BYTES,
     MAX_SCAN_FILES,
@@ -605,6 +606,7 @@ def _declaration_from_version_file(
     node: ScalarNode,
     result: ScanResult,
     cache: dict[Path, _Declaration],
+    diagnostics: SourceDiagnostics | None = None,
 ) -> _Declaration:
     value = node.value.strip()
     if not value or "${{" in value or "$" in value:
@@ -618,6 +620,8 @@ def _declaration_from_version_file(
     if cached is not None:
         return cached
     result.scanned_files.add(relative)
+    if diagnostics is not None:
+        diagnostics.record_derived(relative)
     if len(result.scanned_files) > MAX_SCAN_FILES:
         raise ValueError(f"version file discovery exceeds {MAX_SCAN_FILES} files")
     text = _read_scan_text(root, version_path)
@@ -654,6 +658,7 @@ def _scan_workflow(
     path: Path,
     result: ScanResult,
     version_file_cache: dict[Path, _Declaration],
+    diagnostics: SourceDiagnostics | None = None,
 ) -> list[_Declaration]:
     text = _read_scan_text(root, path)
     declarations: list[_Declaration] = []
@@ -706,6 +711,7 @@ def _scan_workflow(
                             version_file,
                             result,
                             version_file_cache,
+                            diagnostics,
                         ),
                         path,
                     )
@@ -866,7 +872,12 @@ def _group_locations(
     ]
 
 
-def scan_version_contracts(root: Path, config: Mapping[str, Any]) -> ScanResult:
+def scan_version_contracts(
+    root: Path,
+    config: Mapping[str, Any],
+    *,
+    diagnostics: ScannerDiagnostics | None = None,
+) -> ScanResult:
     """Scan an explicitly configured Java major-version contract below ``root``.
 
     The optional ``versions.java`` mapping supplies ``expected`` and repository-relative
@@ -893,24 +904,32 @@ def scan_version_contracts(root: Path, config: Mapping[str, Any]) -> ScanResult:
     version_file_cache: dict[Path, _Declaration] = {}
     first_candidate: dict[str, Path] = {}
     scanners = {
-        "gradle": lambda path: _scan_gradle(root, path),
-        "dockerfiles": lambda path: _scan_dockerfile(root, path),
-        "compose": lambda path: _scan_compose(root, path),
-        "workflows": lambda path: _scan_workflow(
-            root, path, result, version_file_cache
+        "gradle": lambda path, source_diagnostics: _scan_gradle(root, path),
+        "dockerfiles": lambda path, source_diagnostics: _scan_dockerfile(root, path),
+        "compose": lambda path, source_diagnostics: _scan_compose(root, path),
+        "workflows": lambda path, source_diagnostics: _scan_workflow(
+            root, path, result, version_file_cache, source_diagnostics
         ),
-        "docs": lambda path: _scan_document(root, path),
+        "docs": lambda path, source_diagnostics: _scan_document(root, path),
     }
     for source in _SOURCE_NAMES:
-        for path in discover_files(root, _patterns(section, source)):
+        patterns = _patterns(section, source)
+        source_diagnostics = (
+            diagnostics.source(source, patterns, required=source in required)
+            if diagnostics is not None
+            else None
+        )
+        for path in discover_files(root, patterns, diagnostics=source_diagnostics):
             relative = path.relative_to(root)
             if _matches_any(relative.as_posix(), ignored):
+                if source_diagnostics is not None:
+                    source_diagnostics.record_ignored(relative, "configured_ignore")
                 continue
             first_candidate.setdefault(source, relative)
             result.scanned_files.add(relative)
             if len(result.scanned_files) > MAX_SCAN_FILES:
                 raise ValueError(f"version file discovery exceeds {MAX_SCAN_FILES} files")
-            discovered = scanners[source](path)
+            discovered = scanners[source](path, source_diagnostics)
             if len(discovered) > _MAX_DECLARATIONS_PER_FILE:
                 raise ValueError(
                     f"version declarations exceed {_MAX_DECLARATIONS_PER_FILE} in one file"

@@ -15,7 +15,8 @@ import regex
 import yaml
 from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
-from repoinvariant.filesystem import MAX_SCAN_FILES, read_limited_text
+from repoinvariant.diagnostics import ScannerDiagnostics, SourceDiagnostics
+from repoinvariant.filesystem import MAX_SCAN_FILES, contained_path, read_limited_text
 from repoinvariant.models import Finding, Location, ScanResult, Severity
 from repoinvariant.policy import apply_rule_policy
 
@@ -75,7 +76,12 @@ class _MatchBudget:
             raise ValueError("Traceability id_pattern produced too many total matches")
 
 
-def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResult:
+def scan_traceability(
+    root: Path,
+    config_mapping: Mapping[str, Any],
+    *,
+    diagnostics: ScannerDiagnostics | None = None,
+) -> ScanResult:
     """Check configured requirement, specification, and test files for trace gaps.
 
     Paths stored in the returned result are relative to *root*. Invalid, unreadable,
@@ -100,9 +106,32 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
     text_cache: dict[Path, str | None] = {}
     match_budget = _MatchBudget()
 
-    requirement_paths = _glob_files(root, features.get("requirements"), ignore)
-    specification_paths = _glob_files(root, features.get("specifications"), ignore)
-    test_paths = _glob_files(root, features.get("tests"), ignore)
+    configured_sources = {
+        name: _as_patterns(features.get(name))
+        for name in ("requirements", "specifications", "tests")
+    }
+    source_diagnostics = {
+        name: diagnostics.source(name, patterns) if diagnostics is not None else None
+        for name, patterns in configured_sources.items()
+    }
+    requirement_paths = _glob_files(
+        root,
+        configured_sources["requirements"],
+        ignore,
+        source_diagnostics["requirements"],
+    )
+    specification_paths = _glob_files(
+        root,
+        configured_sources["specifications"],
+        ignore,
+        source_diagnostics["specifications"],
+    )
+    test_paths = _glob_files(
+        root,
+        configured_sources["tests"],
+        ignore,
+        source_diagnostics["tests"],
+    )
 
     requirement_occurrences: dict[str, list[_RequirementOccurrence]] = defaultdict(list)
     specification_occurrences: dict[str, list[Location]] = defaultdict(list)
@@ -111,6 +140,10 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
     for path in requirement_paths:
         text = _read_text(root, path, text_cache)
         if text is None:
+            if source_diagnostics["requirements"] is not None:
+                source_diagnostics["requirements"].record_ignored(
+                    path.relative_to(root), "binary"
+                )
             continue
         relative = path.relative_to(root)
         result.scanned_files.add(relative)
@@ -122,6 +155,10 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
     for path in specification_paths:
         text = _read_text(root, path, text_cache)
         if text is None:
+            if source_diagnostics["specifications"] is not None:
+                source_diagnostics["specifications"].record_ignored(
+                    path.relative_to(root), "binary"
+                )
             continue
         relative = path.relative_to(root)
         result.scanned_files.add(relative)
@@ -133,6 +170,10 @@ def scan_traceability(root: Path, config_mapping: Mapping[str, Any]) -> ScanResu
     for path in test_paths:
         text = _read_text(root, path, text_cache)
         if text is None:
+            if source_diagnostics["tests"] is not None:
+                source_diagnostics["tests"].record_ignored(
+                    path.relative_to(root), "binary"
+                )
             continue
         relative = path.relative_to(root)
         result.scanned_files.add(relative)
@@ -273,7 +314,12 @@ def _expand_braces(pattern: str) -> Iterable[str]:
         yield from _expand_braces(replacement)
 
 
-def _glob_files(root: Path, configured: Any, ignore: tuple[str, ...]) -> tuple[Path, ...]:
+def _glob_files(
+    root: Path,
+    configured: Any,
+    ignore: tuple[str, ...],
+    diagnostics: SourceDiagnostics | None = None,
+) -> tuple[Path, ...]:
     found: set[Path] = set()
     for raw_pattern in _as_patterns(configured):
         normalized = raw_pattern.replace("\\", "/")
@@ -301,19 +347,33 @@ def _glob_files(root: Path, configured: Any, ignore: tuple[str, ...]) -> tuple[P
                         relative = candidate.relative_to(root)
                     except ValueError:
                         continue
-                    if _is_ignored(relative, ignore):
+                    ignore_reason = _ignore_reason(relative, ignore)
+                    if ignore_reason is not None:
+                        if diagnostics is not None:
+                            try:
+                                safe_candidate = contained_path(
+                                    root, candidate, label="configured traceability file"
+                                )
+                            except ValueError as exc:
+                                raise _TraceFileError(str(exc)) from exc
+                            if safe_candidate.is_file():
+                                diagnostics.record_ignored(relative, ignore_reason)
                         continue
                     if candidate.is_symlink():
                         raise _TraceFileError(
                             f"Configured traceability file must not be a symbolic link: {relative}"
                         )
-                    if not candidate.is_file():
-                        continue
                     try:
-                        candidate.resolve().relative_to(root)
-                    except ValueError:
+                        safe_candidate = contained_path(
+                            root, candidate, label="configured traceability file"
+                        )
+                    except ValueError as exc:
+                        raise _TraceFileError(str(exc)) from exc
+                    if not safe_candidate.is_file():
                         continue
-                    found.add(candidate)
+                    found.add(safe_candidate)
+                    if diagnostics is not None:
+                        diagnostics.record_matched(relative)
                     if len(found) > MAX_SCAN_FILES:
                         raise _TraceFileError(
                             f"traceability file discovery exceeds {MAX_SCAN_FILES} files"
@@ -326,11 +386,17 @@ def _glob_files(root: Path, configured: Any, ignore: tuple[str, ...]) -> tuple[P
 
 
 def _is_ignored(path: Path, configured: tuple[str, ...]) -> bool:
+    return _ignore_reason(path, configured) is not None
+
+
+def _ignore_reason(path: Path, configured: tuple[str, ...]) -> str | None:
     parts = path.parts
     if any(part.startswith(".") or part in _ALWAYS_IGNORED_PARTS for part in parts):
-        return True
+        return "built_in_ignore"
     relative = path.as_posix()
-    return any(_matches_ignore(relative, pattern) for pattern in configured)
+    if any(_matches_ignore(relative, pattern) for pattern in configured):
+        return "configured_ignore"
+    return None
 
 
 def _matches_ignore(relative: str, raw_pattern: str) -> bool:

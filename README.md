@@ -9,18 +9,20 @@
 > Alpha: catch contract drift across repository artifacts before merge.
 
 RepoInvariant is a deterministic CLI and GitHub Action that checks whether the contracts spread
-across your repository still agree. It focuses on two expensive, repeatable failure modes:
+across your repository still agree. It focuses on three expensive, repeatable failure modes:
 
 - environment variables drifting between `.env.example`, Docker Compose, Kubernetes,
   GitHub Actions, and Spring configuration;
-- requirement IDs disappearing between Markdown, OpenAPI `x-feature-id`, and tests.
+- requirement IDs disappearing between Markdown, OpenAPI `x-feature-id`, and tests;
+- a declared Java major drifting between Gradle toolchains, container images, CI, and
+  structured documentation.
 
 It reports exact evidence instead of guessing intent. No API key, LLM, or source upload is
 required.
 
 ## Status
 
-RepoInvariant `v0.3.0` is a public alpha. The configuration and finding codes may change
+RepoInvariant `v0.4.0` is a public alpha. The configuration and finding codes may change
 before `v1.0.0`. Pin an exact commit SHA when using the GitHub Action.
 
 ## GitHub Action
@@ -47,7 +49,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Check repository contracts
-        uses: xixvivji/RepoInvariant@6eb532eeba44c652f1cf8d94c8831c6807091387 # v0.3.0
+        uses: xixvivji/RepoInvariant@31f7943ef9841a4868a59f16480c8e02e3a1b083 # v0.4.0
 ```
 
 The action installs only the source bundled with the pinned action revision. It does not transmit
@@ -63,6 +65,7 @@ repository contents or require secrets.
 | `fail-on` | `error` | Blocking threshold: `error` or `warning`. |
 | `no-env` | `false` | Skip environment-contract checks. |
 | `no-features` | `false` | Skip feature-traceability checks. |
+| `no-versions` | `false` | Skip configured Java version-contract checks. |
 
 Prefer rule-level severity configuration when only one check needs a temporary downgrade.
 
@@ -117,9 +120,14 @@ make it pass.
 
 ## Configuration
 
-Run `repoinvariant init` to create `.repoinvariant.yml`:
+The versioned
+[JSON Schema](https://github.com/xixvivji/RepoInvariant/blob/main/schemas/repoinvariant-config-v1.schema.json)
+provides IDE completion and catches unknown keys, invalid severities, unsafe path patterns, and
+malformed Java contract settings before a scan. `repoinvariant init` creates
+`.repoinvariant.yml` with the YAML Language Server modeline already attached:
 
 ```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/xixvivji/RepoInvariant/main/schemas/repoinvariant-config-v1.schema.json
 version: 1
 
 env:
@@ -141,6 +149,22 @@ features:
   requirements_mode: definitions
   ignore: []
 
+# Optional: omit this section when the repository has no single Java target.
+versions:
+  java:
+    expected: "21"
+    gradle: ["**/build.gradle", "**/build.gradle.kts"]
+    dockerfiles: ["**/Dockerfile", "**/Dockerfile.*"]
+    compose:
+      - "**/compose*.yml"
+      - "**/compose*.yaml"
+      - "**/docker-compose*.yml"
+      - "**/docker-compose*.yaml"
+    workflows: [.github/workflows/*.yml, .github/workflows/*.yaml]
+    docs: [README.md, docs/**/*.md]
+    ignore: [examples/legacy/**]
+    required: [gradle, workflows, docs]
+
 rules:
   ENV001: error
   ENV002: warning
@@ -149,26 +173,83 @@ rules:
   TRACE002: error
   TRACE003: error
   TRACE004: warning
+  VER001: error
+  VER002: warning
+  VER003: warning
 ```
 
-`requirements_mode: definitions` counts IDs only when they look like canonical Markdown
-definitions (headings, definition lists, and the first column of tables). Set it to `mentions` for
-legacy repositories where any prose reference is authoritative.
+Keep that comment when renaming a custom `--config` file. The Schema describes the user-authored
+configuration before defaults are merged; all sections are optional except that an enabled
+`versions` section requires `java.expected`. A configured list replaces its built-in list instead
+of appending to it, so include every path pattern that must remain in scope.
+
+Schema validation complements the CLI. Duplicate YAML keys, unsupported YAML merge keys (`<<`),
+recursive aliases, file-size and node budgets, Python regular-expression compilation, filesystem
+containment, and symlink checks require runtime context and remain enforced by
+`repoinvariant check` and `repoinvariant doctor`. JSON Schema also treats `1.0` as an integer
+value, while RepoInvariant deliberately accepts only the exact YAML integer `version: 1`. Quote
+values such as `"on"`, `"off"`, `"yes"`, `"no"`, and date-shaped strings when they are intended
+to be ordinary strings so YAML 1.1 and 1.2 tools agree.
+
+`requirements_mode: definitions` counts IDs only in supported canonical Markdown forms: headings,
+leading-ID declarations or list items, leading-pipe table first cells, and setext headings. Set it
+to `mentions` for legacy repositories where any prose reference is authoritative.
 
 The built-in `REQ-*` pattern is printed verbatim because it is a constrained public identifier
 format. Matches from a custom `id_pattern` are reported as deterministic `custom-id-N` labels;
 source locations remain exact, but arbitrary matched repository text never reaches logs or report
 artifacts.
 
+`versions.java.expected` is an opt-in canonical Java major, not an adoption baseline. It must be a
+quoted major such as `"17"` or `"21"`. RepoInvariant recognizes literal Gradle toolchains, known
+Java Docker and Compose image tags, `actions/setup-java`, and structured Markdown declarations.
+Dynamic expressions are reported without printing their contents. Add a source name to `required`
+only when that artifact class must declare the version.
+
 Each finding code can be set to `error`, `warning`, or `off`. This makes staged adoption explicit:
 start a noisy rule as a warning, reduce the accepted backlog, then promote it to an error. Quote
 `"off"` when editing YAML to avoid YAML 1.1 boolean parsing surprises.
+
+## Diagnose scan scope
+
+Use `doctor` to inspect the effective scan before making `check` a merge gate:
+
+```text
+repoinvariant doctor [path] [--config FILE] [--baseline FILE]
+                       [--format text|json] [--verbose]
+                       [--no-env] [--no-features] [--no-versions]
+```
+
+```bash
+repoinvariant doctor .
+repoinvariant doctor . --verbose
+repoinvariant doctor . --format json
+```
+
+The diagnosis shows scanner state, rule severities (including `off` rules), configured source
+coverage, empty source ranges, ignored-file counts, and optional baseline compatibility. It uses
+the same effective configuration and scanner switches as `check`. The default text and JSON
+outputs report counts and statuses. `--verbose` additionally reports bounded, deterministic,
+repository-relative lists of matched and ignored scan paths. Each collection lists at most 50
+items and the complete report lists at most 1,000; exact counts and omitted counts remain visible.
+
+An ignored file is one that first matched a configured source glob and was then excluded by a
+configured or built-in ignore rule, or identified as a binary traceability input. `doctor` does
+not walk the rest of the repository merely to list files that were never in scan scope. It also
+never prints file contents, discovered secret values, custom identifier matches, or baseline hash
+values.
+
+A completed diagnosis returns exit code `0`, including when a source range is empty, a rule is
+`off`, a scanner is disabled or not configured, or a baseline has a different scan scope. Invalid
+configuration or baseline data and unsafe scanner input return exit code `2`; `doctor` does not
+use exit code `1`. Run `repoinvariant check` for the merge-gate decision and contract-failure exit
+code.
 
 ## Adopt an existing repository
 
 ```text
 repoinvariant baseline [path] [--config FILE] [--output FILE] [--force]
-                         [--no-env] [--no-features]
+                         [--no-env] [--no-features] [--no-versions]
 ```
 
 If an established repository already has findings that cannot all be fixed at once, snapshot the
@@ -188,8 +269,9 @@ does not make it new. Resolved entries become non-blocking `stale` entries. Remo
 if an identical violation returns while its stale entry remains, it is still accepted.
 
 The baseline is bound to the effective configuration and enabled scanner set. Use the same
-`--config`, `--no-env`, and `--no-features` options for generation and checking. RepoInvariant
-returns exit code `2` on a scope mismatch instead of silently applying an incompatible baseline.
+`--config`, `--no-env`, `--no-features`, and `--no-versions` options for generation and checking.
+RepoInvariant returns exit code `2` on a scope mismatch instead of silently applying an
+incompatible baseline.
 For the GitHub Action, add the optional input (default: empty):
 
 ```yaml
@@ -222,13 +304,21 @@ the command or configuration was invalid. Add `--fail-on warning` for a stricter
 
 | Code | Meaning | Default severity |
 |---|---|---|
-| `ENV001` | A consumer uses an environment variable absent from the contract | error |
-| `ENV002` | A contract variable has no discovered consumer | warning |
-| `ENV003` | Explicit defaults disagree across artifacts | warning |
-| `TRACE001` | A requirement ID is absent from the specification | error |
-| `TRACE002` | A specification ID has no requirement | error |
-| `TRACE003` | A specification ID has no test reference | error |
-| `TRACE004` | A requirement appears to be defined more than once | warning |
+| [`ENV001`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/environment-contracts.md#env001) | A consumer uses an environment variable absent from the contract | error |
+| [`ENV002`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/environment-contracts.md#env002) | A contract variable has no discovered consumer | warning |
+| [`ENV003`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/environment-contracts.md#env003) | Explicit defaults disagree across artifacts | warning |
+| [`TRACE001`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/feature-traceability.md#trace001) | A requirement ID is absent from the specification | error |
+| [`TRACE002`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/feature-traceability.md#trace002) | A specification ID has no requirement | error |
+| [`TRACE003`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/feature-traceability.md#trace003) | A specification ID has no test reference | error |
+| [`TRACE004`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/feature-traceability.md#trace004) | A requirement appears to be defined more than once | warning |
+| [`VER001`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/java-version.md#ver001) | A recognized static Java declaration differs from `versions.java.expected` | error |
+| [`VER002`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/java-version.md#ver002) | A recognized Java declaration cannot resolve to one comparable literal major | warning |
+| [`VER003`](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/java-version.md#ver003) | A required source group has no recognized Java declaration | warning |
+
+See the
+[complete rule index](https://github.com/xixvivji/RepoInvariant/blob/main/docs/rules/README.md)
+for scanner controls, baseline identity, and the exact supported and unsupported syntax for every
+source.
 
 ## Design boundaries
 
@@ -238,7 +328,9 @@ RepoInvariant deliberately does not:
 - modify repository files automatically;
 - compare live infrastructure or databases;
 - print secret values found in configuration;
-- claim full OpenAPI, Compose, Kubernetes, or Spring validation.
+- claim full OpenAPI, Compose, Kubernetes, or Spring validation;
+- execute Gradle, resolve workflow matrices, or infer Java versions from arbitrary image names and
+  prose.
 
 Use their native validators alongside RepoInvariant. RepoInvariant owns the gap **between** artifacts.
 
@@ -249,16 +341,33 @@ requirement patterns run with a timeout and one shared matching-time budget. Fil
 writes use no-follow directory descriptors so a concurrent symlink swap cannot redirect them
 outside the repository.
 
+## Synthetic compatibility fixtures and parser extensions
+
+Version parsers are exercised offline against small, independently authored fixtures informed by
+file layouts observed in Spring's Docker guide, Apache Fineract, and Testcontainers for Java. Each
+fixture records the upstream repository, immutable commit SHA, license, exact observed paths and
+blob SHAs, and the mapping to its local files; no upstream source or documentation bytes are
+vendored. These fixtures test the local parser model, not byte-for-byte or syntax-level
+compatibility with the referenced projects. See
+[`tests/fixtures/compatibility/THIRD_PARTY_NOTICES.md`](tests/fixtures/compatibility/THIRD_PARTY_NOTICES.md)
+for provenance.
+
+A third-party parser API is intentionally not public yet. Installed Python plugins are executable
+code, so safe activation, bounded repository access, namespaced rules, baseline scope, and failure
+redaction need an explicit contract. The pre-v1 design and completion gate are documented in
+[`docs/parser-plugin-api.md`](docs/parser-plugin-api.md).
+
 ## Roadmap
 
 - [x] Environment contract checks
 - [x] Requirement → OpenAPI → test traceability
 - [x] Text, JSON, Markdown, and SARIF reports
 - [x] Composite GitHub Action
-- [ ] Version-baseline contracts across Gradle, Docker, CI, and documentation
+- [x] Java version contracts across Gradle, Docker, CI, and documentation
 - [ ] Reusable parser plugin API
 - [x] PyPI trusted publishing and provenance-attested release automation
-- [ ] Real-world compatibility fixtures from external projects
+- [ ] Licensed upstream-syntax compatibility snapshots from external projects (pinned synthetic
+      structural fixtures are in place)
 
 See [CONTRIBUTING.md](https://github.com/xixvivji/RepoInvariant/blob/main/CONTRIBUTING.md)
 to help shape future releases. Participation is governed by the

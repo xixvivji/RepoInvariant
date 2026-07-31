@@ -1,0 +1,4 @@
+services:
+  library-check:
+    image: eclipse-temurin:21-jdk
+    command: ["java", "--version"]

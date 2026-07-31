@@ -1,0 +1,11 @@
+plugins {
+    id 'java'
+}
+
+allprojects {
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(21)
+        }
+    }
+}

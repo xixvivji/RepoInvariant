@@ -17,7 +17,7 @@ from repoinvariant.baseline import (
     load_baseline,
     render_baseline,
 )
-from repoinvariant.config import DEFAULT_CONFIG
+from repoinvariant.config import DEFAULT_CONFIG, VERSION_JAVA_DEFAULTS
 from repoinvariant.models import Finding, Location, ScanResult, Severity
 
 
@@ -133,6 +133,46 @@ def test_scope_digest_uses_effective_defaults_sorted_keys_and_list_order() -> No
     assert compute_scope_digest(DEFAULT_CONFIG, no_features=True) != compute_scope_digest(
         DEFAULT_CONFIG
     )
+
+
+def test_scope_digest_preserves_v03_scope_and_tracks_opt_in_versions() -> None:
+    assert compute_scope_digest(DEFAULT_CONFIG) == (
+        "sha256:a53bae2a651f98adf93e1fa1f5dfe4b1e94f42d4406e25920e1717cdd93a92be"
+    )
+    assert compute_scope_digest(DEFAULT_CONFIG, no_features=True) == (
+        "sha256:2e0c978d3c946f8a4eaa560b86e6292bbc5acd28c5f9870af96f6813cc5224d8"
+    )
+    assert compute_scope_digest(DEFAULT_CONFIG, no_versions=True) == compute_scope_digest(
+        DEFAULT_CONFIG
+    )
+    assert compute_scope_digest(DEFAULT_CONFIG, no_env=True) == (
+        "sha256:59955fb463dbd216862ae45b0dd8998e529604aa37482d660b62a0f9bcdd26bc"
+    )
+    assert compute_scope_digest(DEFAULT_CONFIG, no_env=True, no_features=True) == (
+        "sha256:5603b2603cebde00011a9f98e5deb94b82c16a5e2d0f56aafa16f4f18343ea40"
+    )
+    version_config = {
+        "version": 1,
+        "versions": {"java": {"expected": "21"}},
+    }
+
+    enabled = compute_scope_digest(version_config)
+    expanded_version_config = {
+        "version": 1,
+        "versions": {
+            "java": {
+                **deepcopy(VERSION_JAVA_DEFAULTS),
+                "expected": "21",
+            }
+        },
+    }
+
+    assert enabled != compute_scope_digest(DEFAULT_CONFIG)
+    assert enabled == compute_scope_digest(expanded_version_config)
+    assert enabled != compute_scope_digest(version_config, no_versions=True)
+    changed = deepcopy(version_config)
+    changed["versions"]["java"]["expected"] = "17"
+    assert compute_scope_digest(changed) != enabled
 
 
 def test_create_and_apply_baseline_preserve_new_warning_error_and_input() -> None:

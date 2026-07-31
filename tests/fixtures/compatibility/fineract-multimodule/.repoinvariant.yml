@@ -1,0 +1,22 @@
+version: 1
+
+versions:
+  java:
+    expected: "21"
+    gradle:
+      - build.gradle
+      - modules/*/build.gradle
+    dockerfiles:
+      - docker/app/Dockerfile
+    compose:
+      - docker-compose.yml
+    workflows:
+      - .github/workflows/ci.yml
+    docs:
+      - README.md
+    ignore: []
+    required:
+      - gradle
+      - dockerfiles
+      - workflows
+      - docs

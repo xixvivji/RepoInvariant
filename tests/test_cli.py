@@ -82,6 +82,108 @@ features:
     assert "postgres://" not in output
 
 
+def test_check_runs_opt_in_version_contract_and_can_skip_it(tmp_path: Path, capsys) -> None:
+    (tmp_path / "build.gradle.kts").write_text(
+        "kotlin { jvmToolchain(17) }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".repoinvariant.yml").write_text(
+        """version: 1
+versions:
+  java:
+    expected: "21"
+    gradle: [build.gradle.kts]
+    dockerfiles: []
+    compose: []
+    workflows: []
+    docs: []
+    required: [gradle]
+""",
+        encoding="utf-8",
+    )
+
+    assert main(["check", str(tmp_path), "--format", "json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert [(item["code"], item["location"]["path"]) for item in payload["findings"]] == [
+        ("VER001", "build.gradle.kts")
+    ]
+
+    assert main(["check", str(tmp_path), "--no-versions", "--format", "json"]) == 0
+    skipped = json.loads(capsys.readouterr().out)
+    assert skipped["findings"] == []
+
+
+def test_check_escapes_control_characters_in_errors(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    def fail(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("bad path\n::error title=injected::boom\u2028end")
+
+    monkeypatch.setattr("repoinvariant.cli._scan", fail)
+
+    assert main(["check", str(tmp_path), "--github-actions"]) == 2
+    error = capsys.readouterr().err
+    assert "\n::error" not in error
+    assert "bad path\\x0a::error title=injected::boom\\u2028end" in error
+
+
+def test_version_findings_are_baseline_scoped_with_no_versions(tmp_path: Path, capsys) -> None:
+    (tmp_path / "build.gradle.kts").write_text(
+        "kotlin { jvmToolchain(17) }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".repoinvariant.yml").write_text(
+        """version: 1
+versions:
+  java:
+    expected: "21"
+    gradle: [build.gradle.kts]
+    dockerfiles: []
+    compose: []
+    workflows: []
+    docs: []
+""",
+        encoding="utf-8",
+    )
+    common = ["--no-env", "--no-features"]
+
+    assert main(["baseline", str(tmp_path), *common]) == 0
+    baseline_text = (tmp_path / ".repoinvariant-baseline.json").read_text(encoding="utf-8")
+    assert "build.gradle" not in baseline_text
+    assert "Java version" not in baseline_text
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "check",
+                str(tmp_path),
+                *common,
+                "--baseline",
+                ".repoinvariant-baseline.json",
+            ]
+        )
+        == 0
+    )
+    assert "1 suppressed" in capsys.readouterr().err
+
+    assert (
+        main(
+            [
+                "check",
+                str(tmp_path),
+                *common,
+                "--no-versions",
+                "--baseline",
+                ".repoinvariant-baseline.json",
+            ]
+        )
+        == 2
+    )
+    assert "scope does not match" in capsys.readouterr().err
+
+
 def test_check_accepts_option_like_repository_path(tmp_path: Path, capsys) -> None:
     root = tmp_path / "--help"
     root.mkdir()

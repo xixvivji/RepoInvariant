@@ -49,7 +49,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Check repository contracts
-        uses: xixvivji/RepoInvariant@6eb532eeba44c652f1cf8d94c8831c6807091387 # v0.3.0
+        uses: xixvivji/RepoInvariant@31f7943ef9841a4868a59f16480c8e02e3a1b083 # v0.4.0
 ```
 
 The action installs only the source bundled with the pinned action revision. It does not transmit

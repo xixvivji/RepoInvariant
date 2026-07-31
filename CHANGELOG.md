@@ -4,6 +4,8 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-31
+
 ### Added
 
 - A `doctor` command with text and JSON diagnostics for effective scanner state, rule severity,
@@ -20,6 +22,10 @@ All notable changes will be documented in this file. The project follows Semanti
   path and severity validation, and a YAML Language Server modeline in generated configurations.
 - Rule-level reference documentation for every environment, traceability, and Java finding,
   including exact supported syntax, non-detection boundaries, privacy, and baseline identity.
+
+### Changed
+
+- Updated the documented stable Action pin to an immutable `v0.4.0` release source commit.
 
 ### Security
 

@@ -8,10 +8,6 @@
 
 > Alpha: catch contract drift across repository artifacts before merge.
 
-> Development branch note: the Java version contract, `no-versions` input, and `doctor` command
-> documented below are unreleased. They are not included in the PyPI `0.3.0` package or the
-> published `v0.3.0` Action.
-
 RepoInvariant is a deterministic CLI and GitHub Action that checks whether the contracts spread
 across your repository still agree. It focuses on three expensive, repeatable failure modes:
 
@@ -26,7 +22,7 @@ required.
 
 ## Status
 
-RepoInvariant `v0.3.0` is a public alpha. The configuration and finding codes may change
+RepoInvariant `v0.4.0` is a public alpha. The configuration and finding codes may change
 before `v1.0.0`. Pin an exact commit SHA when using the GitHub Action.
 
 ## GitHub Action
@@ -53,7 +49,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Check repository contracts
-        uses: xixvivji/RepoInvariant@6eb532eeba44c652f1cf8d94c8831c6807091387 # v0.3.0
+        uses: xixvivji/RepoInvariant@31f7943ef9841a4868a59f16480c8e02e3a1b083 # v0.4.0
 ```
 
 The action installs only the source bundled with the pinned action revision. It does not transmit

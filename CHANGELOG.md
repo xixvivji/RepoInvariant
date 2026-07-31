@@ -26,6 +26,8 @@ All notable changes will be documented in this file. The project follows Semanti
 ### Changed
 
 - Updated the documented stable Action pin to an immutable `v0.4.0` release source commit.
+- Added a guarded manual publishing path that validates `main`, creates an annotated tag, and then
+  reuses the same PyPI, provenance, and GitHub Release gates as tag-push releases.
 
 ### Security
 

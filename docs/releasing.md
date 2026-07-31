@@ -42,10 +42,19 @@ eligible reviewer. The release workflow grants `id-token: write` only to the pub
    git push origin vX.Y.Z
    ```
 
+   If a local tag push is unavailable, open **Actions → Release → Run workflow**, select `main`,
+   enter `vX.Y.Z`, and enable `publish`. The manual path runs the complete validation gate before
+   creating an annotated tag at the selected `main` commit. Leaving `publish` disabled remains a
+   validation-only dry run. The tag created with `GITHUB_TOKEN` deliberately does not start a
+   second workflow; the dispatch that created it continues through provenance and publishing.
+   Never dispatch publishing from another branch or reuse a published tag.
+
 7. Approve the protected `pypi` environment deployment.
 8. Verify the PyPI files, attestations, and GitHub release assets.
 9. Merge `main` back into `develop` and delete `release/X.Y.Z`.
 
 The workflow refuses a tag whose value differs from the package `__version__`. PyPI Trusted
 Publishing generates short-lived credentials and distribution attestations; no PyPI token belongs
-in repository secrets.
+in repository secrets. Protect `v*` with a tag ruleset that blocks updates and deletions. If a
+post-PyPI GitHub Release step fails, rerun only the failed jobs; the release job can resume a
+matching draft and refuses to overwrite a published release.

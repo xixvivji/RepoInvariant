@@ -2,6 +2,16 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (for example, v0.4.0)
+        required: false
+        type: string
+      publish:
+        description: Create the annotated tag and publish the release
+        required: true
+        default: false
+        type: boolean
   push:
     tags:
       - "v*.*.*"
@@ -10,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.publish && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -35,10 +45,25 @@ jobs:
           cache-dependency-glob: uv.lock
       - name: Sync locked dependencies
         run: uv sync --frozen --extra dev
-      - name: Verify tag matches package version
-        if: github.event_name == 'push'
+      - name: Verify release request
+        if: github.event_name == 'push' || inputs.publish
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "manual publishing must run from the main branch" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+|\.dev[0-9]+)?$ ]]; then
+            echo "release tag must be a supported v-prefixed semantic version" >&2
+            exit 1
+          fi
+      - name: Verify tag matches package version
+        if: github.event_name == 'push' || inputs.publish
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           uv run --frozen python - <<'PY'
           import os
@@ -74,10 +99,83 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  release-tag:
+    name: Verify or create annotated release tag
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Check out release target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: ${{ github.event_name == 'workflow_dispatch' }}
+          ref: ${{ github.sha }}
+      - name: Verify or create annotated tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+
+          release_target="$(git rev-parse HEAD)"
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          if ! git rev-list --first-parent refs/remotes/origin/main |
+            grep -Fx "$release_target" >/dev/null; then
+            echo "release target $release_target is not in main first-parent history" >&2
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            actual_target="$(git rev-parse "refs/tags/$RELEASE_TAG^{}")"
+            if [[ "$actual_target" != "$release_target" ]]; then
+              echo "tag $RELEASE_TAG targets $actual_target, expected $release_target" >&2
+              exit 1
+            fi
+            if [[ "$(git cat-file -t "refs/tags/$RELEASE_TAG")" != "tag" ]]; then
+              echo "tag $RELEASE_TAG must be annotated" >&2
+              exit 1
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$RELEASE_TAG" "$release_target" -m "RepoInvariant $RELEASE_TAG"
+            git push origin "refs/tags/$RELEASE_TAG"
+          else
+            echo "tag $RELEASE_TAG is missing from the push event" >&2
+            exit 1
+          fi
+
+          expected_prerelease=false
+          if [[ "$RELEASE_TAG" =~ (a|b|rc|dev)[0-9] ]]; then
+            expected_prerelease=true
+          fi
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft="$(
+              gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft
+            )"
+            is_prerelease="$(
+              gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+                --json isPrerelease --jq .isPrerelease
+            )"
+            if [[ "$is_draft" != "true" || "$is_prerelease" != "$expected_prerelease" ]]; then
+              echo "existing release must be a matching draft before publishing" >&2
+              exit 1
+            fi
+          fi
+
   attest:
     name: Attest distributions
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    needs: [build, release-tag]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -107,8 +205,10 @@ jobs:
 
   publish-pypi:
     name: Publish to PyPI
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    needs: [build, release-tag, attest]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:
@@ -133,13 +233,38 @@ jobs:
 
   github-release:
     name: Create GitHub release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
     needs: [publish-pypi, attest]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      - name: Check out release target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Reverify annotated tag target
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+
+          release_target="$(git rev-parse HEAD)"
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          actual_target="$(git rev-parse "refs/tags/$RELEASE_TAG^{}")"
+          if [[ "$actual_target" != "$release_target" ]]; then
+            echo "tag $RELEASE_TAG targets $actual_target, expected $release_target" >&2
+            exit 1
+          fi
+          if [[ "$(git cat-file -t "refs/tags/$RELEASE_TAG")" != "tag" ]]; then
+            echo "tag $RELEASE_TAG must be annotated" >&2
+            exit 1
+          fi
       - name: Download distributions
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -153,7 +278,7 @@ jobs:
       - name: Create checksums and publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           set -Eeuo pipefail
 
@@ -180,9 +305,27 @@ jobs:
             --title "RepoInvariant $RELEASE_TAG"
             --draft
           )
+          expected_prerelease=false
           if [[ "$RELEASE_TAG" =~ (a|b|rc|dev)[0-9] ]]; then
+            expected_prerelease=true
             release_flags+=(--prerelease)
           fi
 
-          gh release create "$RELEASE_TAG" "${assets[@]}" "${release_flags[@]}"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft="$(
+              gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft
+            )"
+            is_prerelease="$(
+              gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+                --json isPrerelease --jq .isPrerelease
+            )"
+            if [[ "$is_draft" != "true" || "$is_prerelease" != "$expected_prerelease" ]]; then
+              echo "existing release must be a matching draft before it can be resumed" >&2
+              exit 1
+            fi
+            gh release upload "$RELEASE_TAG" "${assets[@]}" \
+              --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" "${release_flags[@]}"
+          fi
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false

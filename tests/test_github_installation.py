@@ -8,6 +8,10 @@ CODEQL_UPLOAD = (
     "github/codeql-action/upload-sarif@"
     "f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4"
 )
+REPOINVARIANT_ACTION = (
+    "xixvivji/RepoInvariant@"
+    "d045e7844f636b20473efeff4e9f62cbfcf16690 # v0.5.0"
+)
 
 
 def _workflow_text(path: Path) -> str:
@@ -27,6 +31,7 @@ def test_consumer_workflow_is_copyable_pinned_and_fork_safe() -> None:
     assert "github.event.pull_request.head.repo.full_name == github.repository" in workflow
     assert "steps.repoinvariant.outputs.report-path != ''" in workflow
     assert CODEQL_UPLOAD in workflow
+    assert REPOINVARIANT_ACTION in workflow
 
     references = re.findall(r"^\s*uses:\s+([^@\s]+)@([^\s]+)", workflow, re.MULTILINE)
     assert {name for name, _ in references} == {

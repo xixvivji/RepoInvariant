@@ -32,6 +32,8 @@ All notable changes will be documented in this file. The project follows Semanti
 - Avoided Spring environment false positives when a placeholder is backed by a same-file static
   top-level YAML or `.properties` assignment; self-references and undefined placeholders remain
   consumers.
+- Kept the 10,000-occurrence performance regression gate while allowing bounded hosted-runner CPU
+  variance under coverage tracing.
 - Pinned the documented Action to an immutable `v0.5.0` release source commit.
 
 ### Security

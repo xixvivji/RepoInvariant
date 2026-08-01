@@ -1,0 +1,21 @@
+fixture: spring-petclinic-maven
+kind: pinned-upstream-byte-snapshot
+copied_bytes: true
+source:
+  repository: https://github.com/spring-projects/spring-petclinic
+  commit: 88e37c15cf6fc8490b01bc3e8e2c800cec1ac272
+  license: Apache-2.0
+observed_at: "2026-08-01"
+observation_method: github-contents-api-at-pinned-commit
+copied_paths:
+  - fixture_path: pom.xml
+    source_path: pom.xml
+    blob_sha: db5b9f78a5370deae4ace1192d5a8acf4b140d8e
+    source_lines:
+      start: 17
+      end: 38
+    size_bytes: 1182
+    sha256: 0bc3e0ba666767dbfb3ca2f3a711cef9a52ff4055da2222fea1c62f1d102674a
+license_files:
+  - NOTICE
+  - ../../../../LICENSE

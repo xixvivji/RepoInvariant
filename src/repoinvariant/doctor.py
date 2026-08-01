@@ -31,7 +31,15 @@ _SCANNERS = ("env", "features", "versions")
 _SOURCES = {
     "env": ("contracts", "compose", "kubernetes", "workflows", "spring"),
     "features": ("requirements", "specifications", "tests"),
-    "versions": ("gradle", "dockerfiles", "compose", "workflows", "docs"),
+    "versions": (
+        "gradle",
+        "maven",
+        "version_files",
+        "dockerfiles",
+        "compose",
+        "workflows",
+        "docs",
+    ),
 }
 _RULES = {
     "ENV001": ("env", "error"),
@@ -181,11 +189,18 @@ def _source_payload(
     source: SourceDiagnostics,
     scanner_state: str,
     budget: _VerboseBudget,
+    *,
+    required_missing: bool = False,
 ) -> dict[str, Any]:
     return {
         "name": source.name,
         "state": _source_state(source, scanner_state),
         "required": source.required,
+        "required_status": (
+            "missing" if required_missing else "satisfied"
+        )
+        if source.required
+        else None,
         "patterns": _pattern_collection(source.patterns, budget),
         "matched": _path_collection(source.matched_files, budget),
         "derived": _path_collection(source.derived_files, budget),
@@ -219,6 +234,7 @@ def _baseline_payload(
     no_env: bool,
     no_features: bool,
     no_versions: bool,
+    plugin_scope: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     if baseline_path is None:
         return {"status": "not_selected", "path": None, "scope_match": None}
@@ -230,6 +246,7 @@ def _baseline_payload(
             no_env=no_env,
             no_features=no_features,
             no_versions=no_versions,
+            plugin_scope=plugin_scope,
         ),
     )
     return {
@@ -246,10 +263,16 @@ def _scanner_payload(
     diagnostics: ScannerDiagnostics,
     result: ScanResult,
     budget: _VerboseBudget,
+    missing_required_sources: set[str],
 ) -> dict[str, Any]:
     files = _path_collection(result.scanned_files, budget)
     sources = [
-        _source_payload(diagnostics.sources[source], state, budget)
+        _source_payload(
+            diagnostics.sources[source],
+            state,
+            budget,
+            required_missing=source in missing_required_sources,
+        )
         for source in _SOURCES[name]
     ]
     return {
@@ -300,6 +323,7 @@ def build_doctor_report(
     no_env: bool = False,
     no_features: bool = False,
     no_versions: bool = False,
+    plugin_scope: Sequence[Mapping[str, Any]] = (),
     verbose: bool = False,
 ) -> dict[str, Any]:
     """Run configured scanners once and return a deterministic diagnostic model."""
@@ -326,6 +350,7 @@ def build_doctor_report(
         name: _configured_diagnostics(config, name, diagnostic_budget) for name in _SCANNERS
     }
     results = {name: ScanResult() for name in _SCANNERS}
+    missing_required_sources = {name: set() for name in _SCANNERS}
     scan_functions = {
         "env": scan_env_contracts,
         "features": scan_traceability,
@@ -336,7 +361,25 @@ def build_doctor_report(
         state, _ = state_details[name]
         if state != "active":
             continue
-        results[name] = scan_functions[name](root, config, diagnostics=diagnostics[name])
+        scan_config = config
+        if name == "versions":
+            configured_rules = config.get("rules")
+            rules = dict(configured_rules) if isinstance(configured_rules, Mapping) else {}
+            # Required-range coverage is a doctor fact even when VER003 reporting is disabled.
+            rules["VER003"] = "warning"
+            scan_config = {**config, "rules": rules}
+        results[name] = scan_functions[name](
+            root,
+            scan_config,
+            diagnostics=diagnostics[name],
+        )
+        missing_required_sources[name] = {
+            finding.baseline_key.rsplit(":", 1)[-1]
+            for finding in results[name].findings
+            if finding.code == "VER003"
+            and isinstance(finding.baseline_key, str)
+            and finding.baseline_key.startswith("java:required:")
+        }
         # Doctor reports scan coverage, never finding evidence or discovered identifiers.
         results[name].findings.clear()
         unique_files.update(results[name].scanned_files)
@@ -352,6 +395,7 @@ def build_doctor_report(
             diagnostics[name],
             results[name],
             budget,
+            missing_required_sources[name],
         )
         for name in _SCANNERS
     ]
@@ -375,6 +419,7 @@ def build_doctor_report(
             no_env=no_env,
             no_features=no_features,
             no_versions=no_versions,
+            plugin_scope=plugin_scope,
         ),
         "verbose": {
             "enabled": verbose,
@@ -520,9 +565,40 @@ def render_doctor_report(report: Mapping[str, Any], format_name: str) -> str:
     return rendered
 
 
+def strict_doctor_issues(report: Mapping[str, Any]) -> list[str]:
+    """Return deterministic coverage failures for an explicit strict diagnosis."""
+
+    active_rule_scanners = {
+        rule["scanner"]
+        for rule in report["rules"]
+        if rule["active"]
+    }
+    issues: list[str] = []
+    for scanner in report["scanners"]:
+        if scanner["state"] != "active":
+            continue
+        required_sources = [source for source in scanner["sources"] if source["required"]]
+        scanner_is_effective = scanner["name"] in active_rule_scanners or bool(
+            required_sources
+        )
+        if scanner_is_effective and scanner["empty"]:
+            issues.append(
+                f"scanner {scanner['name']!r} is active but scanned no files"
+            )
+        for source in required_sources:
+            if source["required_status"] == "satisfied":
+                continue
+            issues.append(
+                f"scanner {scanner['name']!r} required source {source['name']!r} "
+                f"has no recognized declaration ({source['state']})"
+            )
+    return issues
+
+
 __all__ = [
     "MAX_VERBOSE_ITEMS",
     "PATHS_PER_COLLECTION",
     "build_doctor_report",
     "render_doctor_report",
+    "strict_doctor_issues",
 ]

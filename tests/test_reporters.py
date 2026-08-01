@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 
+import pytest
+
+from repoinvariant import reporters
 from repoinvariant.models import Finding, Location, ScanResult, Severity
 from repoinvariant.reporters import render_json, render_markdown, render_sarif, render_text
 
@@ -83,8 +86,29 @@ def test_sarif_report_contains_rule_and_region(tmp_path: Path) -> None:
 
     assert payload["version"] == "2.1.0"
     assert run["tool"]["driver"]["name"] == "RepoInvariant"
+    assert run["tool"]["driver"]["rules"][0]["shortDescription"]["text"] == (
+        "RepoInvariant finding ENV001"
+    )
     assert run["results"][0]["ruleId"] == "ENV001"
     assert run["results"][0]["locations"][0]["physicalLocation"]["region"]["startLine"] == 7
+
+
+def test_sarif_refuses_more_results_than_github_accepts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(reporters, "MAX_SARIF_RESULTS", 1)
+
+    with pytest.raises(ValueError, match="limit of 1 results per run"):
+        render_sarif(_result(), tmp_path)
+
+
+def test_sarif_refuses_reports_over_githubs_compressed_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(reporters, "MAX_SARIF_COMPRESSED_BYTES", 1)
+
+    with pytest.raises(ValueError, match="10 MiB compressed upload limit"):
+        render_sarif(_result(), tmp_path)
 
 
 def test_warning_threshold_is_reflected_in_all_status_reports(tmp_path: Path) -> None:

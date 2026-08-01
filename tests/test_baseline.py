@@ -50,6 +50,28 @@ def _baseline_document(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     return path, document
 
 
+def _plugin_scope(
+    plugin_id: str = "sample.todo",
+    *,
+    version: str = "1.0.0",
+    marker: str = "TODO",
+) -> dict[str, object]:
+    return {
+        "api_version": 1,
+        "config": {"marker": marker},
+        "distribution": {"name": f"{plugin_id}-distribution", "version": version},
+        "id": plugin_id,
+        "rule_overrides": {},
+        "rules": [
+            {
+                "code": "TODO001",
+                "default_severity": "warning",
+                "description": "Synthetic plugin rule.",
+            }
+        ],
+    }
+
+
 def test_fingerprint_is_canonical_v1_sha256() -> None:
     finding = _finding("ENV001", "SERVICE_PORT")
     canonical = b'["repoinvariant-finding",1,"ENV001","SERVICE_PORT"]'
@@ -173,6 +195,55 @@ def test_scope_digest_preserves_v03_scope_and_tracks_opt_in_versions() -> None:
     changed = deepcopy(version_config)
     changed["versions"]["java"]["expected"] = "17"
     assert compute_scope_digest(changed) != enabled
+
+
+def test_plugin_scope_binds_selection_distribution_rules_and_configuration() -> None:
+    first = _plugin_scope()
+    second = _plugin_scope("another.scan")
+    base = compute_scope_digest(DEFAULT_CONFIG)
+    selected = compute_scope_digest(DEFAULT_CONFIG, plugin_scope=[first])
+
+    assert selected != base
+    assert compute_scope_digest(DEFAULT_CONFIG, plugin_scope=[second, first]) == (
+        compute_scope_digest(DEFAULT_CONFIG, plugin_scope=[first, second])
+    )
+    assert compute_scope_digest(
+        DEFAULT_CONFIG, plugin_scope=[_plugin_scope(version="2.0.0")]
+    ) != selected
+    assert compute_scope_digest(
+        DEFAULT_CONFIG, plugin_scope=[_plugin_scope(marker="FIXME")]
+    ) != selected
+    changed_rule = deepcopy(first)
+    changed_rule["rules"][0]["default_severity"] = "error"
+    assert compute_scope_digest(DEFAULT_CONFIG, plugin_scope=[changed_rule]) != selected
+
+    configured_but_unselected = deepcopy(DEFAULT_CONFIG)
+    configured_but_unselected["plugins"] = {
+        "sample.todo": {"config": {"marker": "TODO"}, "rules": {}}
+    }
+    assert compute_scope_digest(configured_but_unselected) == base
+
+
+def test_namespaced_plugin_finding_round_trips_through_baseline_scope() -> None:
+    finding = _finding("sample.todo:TODO001", "plugin:sample.todo:TODO001:todo.txt:1")
+    scope = [_plugin_scope()]
+    baseline = create_baseline(
+        ScanResult(findings=[finding]),
+        DEFAULT_CONFIG,
+        plugin_scope=scope,
+    )
+
+    application = apply_baseline(
+        ScanResult(findings=[finding]),
+        baseline,
+        DEFAULT_CONFIG,
+        plugin_scope=scope,
+    )
+
+    assert application.suppressed_count == 1
+    assert application.result.findings == []
+    with pytest.raises(BaselineError, match="scope does not match"):
+        apply_baseline(ScanResult(findings=[finding]), baseline, DEFAULT_CONFIG)
 
 
 def test_create_and_apply_baseline_preserve_new_warning_error_and_input() -> None:

@@ -1,6 +1,14 @@
-"""RepoInvariant public package API."""
-
-from repoinvariant.models import Finding, Location, ScanResult, Severity
+"""RepoInvariant public package API with lazy model exports for safe CLI bootstrap."""
 
 __all__ = ["Finding", "Location", "ScanResult", "Severity"]
 __version__ = "0.4.0"
+
+
+def __getattr__(name: str) -> object:
+    if name not in __all__:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from repoinvariant import models
+
+    value = getattr(models, name)
+    globals()[name] = value
+    return value

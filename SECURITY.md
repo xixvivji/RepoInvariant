@@ -15,7 +15,20 @@ suggested mitigation. You should receive an acknowledgement within seven days.
 
 ## Data handling
 
-RepoInvariant scans local files and produces local reports. It does not make network requests during a
-scan. Parsers must never include discovered secret values in findings or reports; variable names
-and source locations are sufficient evidence. Matches from custom requirement patterns receive
-opaque labels rather than being copied into output.
+RepoInvariant's built-in scanners read local files, produce local reports, and do not make network
+requests during a scan. Built-in parsers never include discovered secret values in findings or
+reports; variable names and source locations are sufficient evidence. Matches from custom
+requirement patterns receive opaque labels rather than being copied into output.
+
+An explicitly selected third-party plugin is trusted in-process code. It can access the filesystem,
+environment, and network independently of the bounded `RepositoryView`, and it controls the text of
+its finding messages and hints. The core validates evidence shape and redacts unexpected exceptions,
+but it cannot determine whether plugin-authored text contains sensitive data. Install, pin, and
+select only reviewed plugins whose data-handling policy is acceptable for the repository.
+
+The installed CLI removes working-directory, scan-root, and `PYTHONPATH` import roots before
+loading parser dependencies or a selected plugin, and fails closed when the selected entry-point
+target was preloaded from one of those roots. This prevents repository-local dependency and plugin
+module shadowing after RepoInvariant's bootstrap begins. Python resolves the `repoinvariant`
+package itself before that bootstrap; use `python -I -m repoinvariant` for an untrusted initial
+search path, or use the installed console script with `PYTHONPATH` unset.

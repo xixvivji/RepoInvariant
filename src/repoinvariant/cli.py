@@ -17,11 +17,22 @@ from repoinvariant.baseline import (
     render_baseline,
 )
 from repoinvariant.config import CONFIG_NAME, DEFAULT_CONFIG_TEXT, ConfigError, load_config
-from repoinvariant.doctor import build_doctor_report, render_doctor_report
+from repoinvariant.detection import detect_config, render_detected_config
+from repoinvariant.doctor import (
+    build_doctor_report,
+    render_doctor_report,
+    strict_doctor_issues,
+)
 from repoinvariant.env_contracts import scan_env_contracts
 from repoinvariant.filesystem import atomic_write_text
 from repoinvariant.github_actions import emit_github_feedback
 from repoinvariant.models import ScanResult, Severity
+from repoinvariant.plugin_api import (
+    LoadedPlugin,
+    load_plugins,
+    plugin_scope_payload,
+    scan_plugins,
+)
 from repoinvariant.reporters import render, safe_console_text
 from repoinvariant.traceability import scan_traceability
 from repoinvariant.version_contracts import scan_version_contracts
@@ -61,6 +72,13 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--no-features", action="store_true", help="skip feature traceability")
     check.add_argument("--no-versions", action="store_true", help="skip version contracts")
     check.add_argument(
+        "--plugin",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="run an installed repoinvariant.scanners.v1 plugin (repeatable)",
+    )
+    check.add_argument(
         "--baseline",
         type=Path,
         help="suppress findings accepted in a repository baseline",
@@ -83,6 +101,13 @@ def build_parser() -> argparse.ArgumentParser:
     baseline.add_argument("--no-env", action="store_true", help="skip environment contracts")
     baseline.add_argument("--no-features", action="store_true", help="skip feature traceability")
     baseline.add_argument("--no-versions", action="store_true", help="skip version contracts")
+    baseline.add_argument(
+        "--plugin",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="include an installed repoinvariant.scanners.v1 plugin (repeatable)",
+    )
 
     doctor = subcommands.add_parser(
         "doctor",
@@ -106,13 +131,30 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="list bounded, repository-relative patterns and paths",
     )
+    doctor.add_argument(
+        "--strict",
+        action="store_true",
+        help="fail when an effective scanner is empty or a required range is missing",
+    )
     doctor.add_argument("--no-env", action="store_true", help="skip environment contracts")
     doctor.add_argument("--no-features", action="store_true", help="skip feature traceability")
     doctor.add_argument("--no-versions", action="store_true", help="skip version contracts")
+    doctor.add_argument(
+        "--plugin",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="include an installed plugin when checking baseline scope (repeatable)",
+    )
 
     init = subcommands.add_parser("init", help=f"create a starter {CONFIG_NAME}")
     init.add_argument("path", nargs="?", default=".", type=Path, help="repository root")
     init.add_argument("--force", action="store_true", help="replace an existing config")
+    init.add_argument(
+        "--detect",
+        action="store_true",
+        help="include only supported artifact ranges already present in the repository",
+    )
     return parser
 
 
@@ -154,6 +196,7 @@ def _scan(
     no_env: bool,
     no_features: bool,
     no_versions: bool,
+    plugins: Sequence[LoadedPlugin] = (),
 ) -> ScanResult:
     result = ScanResult()
     if not no_env:
@@ -162,6 +205,8 @@ def _scan(
         result.extend(scan_traceability(root, config))
     if not no_versions:
         result.extend(scan_version_contracts(root, config))
+    if plugins:
+        result.extend(scan_plugins(root, plugins))
     return result
 
 
@@ -175,12 +220,15 @@ def _check(args: argparse.Namespace) -> int:
         if args.baseline and _same_path(root, args.baseline, config_path):
             raise ValueError("baseline file and configuration file must be different paths")
         config = load_config(root, args.config)
+        plugins = load_plugins(args.plugin, config, repository_root=root)
+        plugin_scope = plugin_scope_payload(plugins)
         result = _scan(
             root,
             config,
             no_env=args.no_env,
             no_features=args.no_features,
             no_versions=args.no_versions,
+            plugins=plugins,
         )
         if args.baseline:
             application = apply_baseline(
@@ -190,6 +238,7 @@ def _check(args: argparse.Namespace) -> int:
                 no_env=args.no_env,
                 no_features=args.no_features,
                 no_versions=args.no_versions,
+                plugin_scope=plugin_scope,
             )
             result = application.result
             baseline_counts = (application.suppressed_count, application.stale_count)
@@ -250,12 +299,15 @@ def _baseline(args: argparse.Namespace) -> int:
                 f"{destination} already exists (use --force to replace it after review)"
             )
         config = load_config(root, args.config)
+        plugins = load_plugins(args.plugin, config, repository_root=root)
+        plugin_scope = plugin_scope_payload(plugins)
         result = _scan(
             root,
             config,
             no_env=args.no_env,
             no_features=args.no_features,
             no_versions=args.no_versions,
+            plugins=plugins,
         )
         baseline = create_baseline(
             result,
@@ -263,6 +315,7 @@ def _baseline(args: argparse.Namespace) -> int:
             no_env=args.no_env,
             no_features=args.no_features,
             no_versions=args.no_versions,
+            plugin_scope=plugin_scope,
         )
         output = atomic_write_text(
             root,
@@ -290,6 +343,7 @@ def _doctor(args: argparse.Namespace) -> int:
     try:
         root = _resolve_root(args.path)
         config = load_config(root, args.config)
+        plugins = load_plugins(args.plugin, config, repository_root=root)
         report = build_doctor_report(
             root,
             config,
@@ -298,6 +352,7 @@ def _doctor(args: argparse.Namespace) -> int:
             no_env=args.no_env,
             no_features=args.no_features,
             no_versions=args.no_versions,
+            plugin_scope=plugin_scope_payload(plugins),
             verbose=args.verbose,
         )
         rendered = render_doctor_report(report, args.format_name)
@@ -308,7 +363,12 @@ def _doctor(args: argparse.Namespace) -> int:
     except (ConfigError, OSError, UnicodeError, ValueError) as exc:
         _print_error(exc)
         return 2
-    return 0
+    if not args.strict:
+        return 0
+    issues = strict_doctor_issues(report)
+    for issue in issues:
+        _print_error(f"doctor --strict: {issue}")
+    return 1 if issues else 0
 
 
 def _init(args: argparse.Namespace) -> int:
@@ -327,8 +387,13 @@ def _init(args: argparse.Namespace) -> int:
         )
         return 2
     try:
-        atomic_write_text(root, destination, DEFAULT_CONFIG_TEXT, label="configuration file")
-    except (OSError, UnicodeError, ValueError) as exc:
+        config_text = (
+            render_detected_config(detect_config(root))
+            if args.detect
+            else DEFAULT_CONFIG_TEXT
+        )
+        atomic_write_text(root, destination, config_text, label="configuration file")
+    except (ConfigError, OSError, UnicodeError, ValueError) as exc:
         _print_error(exc)
         return 2
     print(f"Created {safe_console_text(str(destination))}")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import io
 import re
+import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -23,10 +24,21 @@ from repoinvariant.filesystem import (
 )
 from repoinvariant.models import Finding, Location, ScanResult, Severity
 from repoinvariant.policy import apply_rule_policy
+from repoinvariant.resource_budget import ScanBudget, ScanLimits
 
-_SOURCE_NAMES = ("gradle", "dockerfiles", "compose", "workflows", "docs")
+_SOURCE_NAMES = (
+    "gradle",
+    "maven",
+    "version_files",
+    "dockerfiles",
+    "compose",
+    "workflows",
+    "docs",
+)
 _SOURCE_LABELS = {
     "gradle": "Gradle",
+    "maven": "Maven",
+    "version_files": "Java version file",
     "dockerfiles": "Dockerfile",
     "compose": "Compose",
     "workflows": "GitHub Actions",
@@ -48,8 +60,31 @@ _DISTRIBUTION_VERSION_RE = re.compile(
     r"(?:$|[-+_])",
     re.ASCII,
 )
+_JAVA_VERSION_MARKER_RE = re.compile(
+    r"(?:^|[-_@])"
+    r"(?:java|jdk|jre|openjdk(?:64)?|graalvm(?:64)?|temurin|corretto|"
+    r"amazoncorretto|zulu|liberica|sapmachine|semeru|ibm-semeru)"
+    r"[-_]?(?P<major>[1-9][0-9]{0,2})(?:$|[-_.+])",
+    re.IGNORECASE | re.ASCII,
+)
+_AMBIGUOUS_VERSION_FILE_RE = re.compile(
+    r"(?:^|[-_])(?:or|and)[-_](?:1\.)?[1-9][0-9]{0,2}(?:$|[-_.+])",
+    re.IGNORECASE | re.ASCII,
+)
 _GRADLE_CALL_RE = re.compile(
     r"\b(?:JavaLanguageVersion\s*\.\s*of|jvmToolchain)\s*\((?P<value>[^)]*)\)"
+)
+_GRADLE_COMPATIBILITY_RE = re.compile(
+    r"(?<![A-Za-z0-9_])"
+    r"(?:(?:java)\s*\.\s*)?"
+    r"(?P<name>sourceCompatibility|targetCompatibility)"
+    r"(?P<operator>\s*=\s*|[ \t]+)"
+    r"(?P<value>[^\s;,}\r\n]+)",
+    re.ASCII,
+)
+_GRADLE_JAVA_VERSION_RE = re.compile(
+    r"^JavaVersion\s*\.\s*VERSION_(?:(?:1_)?(?P<major>[1-9][0-9]{0,2}))$",
+    re.ASCII,
 )
 _DOCKER_ARG_RE = re.compile(
     r"^\s*ARG\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
@@ -65,7 +100,8 @@ _ARG_REFERENCE_RE = re.compile(
     r"(?P<plain>[A-Za-z_][A-Za-z0-9_]*))"
 )
 _EMBEDDED_JAVA_TAG_RE = re.compile(
-    r"(?:^|[-_])(?:jdk|jre|open|temurin|corretto|openjdk|zulu|liberica|sapmachine)"
+    r"(?:^|[-_])(?:jdk|jre|open|temurin|corretto|amazoncorretto|openjdk|zulu|"
+    r"liberica|sapmachine|semeru|ibm-semeru)"
     r"[-_]?(?P<major>[1-9][0-9]{0,2})(?:$|[-_.+])",
     re.IGNORECASE,
 )
@@ -101,9 +137,19 @@ _DOC_RANGE_RE = re.compile(
 _MARKDOWN_FENCE_RE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})")
 _MAX_YAML_DEPTH = 100
 _MAX_YAML_NODES = 20_000
+_MAX_XML_NODES = 20_000
+_MAX_XML_DEPTH = 100
 _MAX_DECLARATIONS_PER_FILE = 10_000
 _MAX_TOTAL_DECLARATIONS = 100_000
 _MAX_DOCKER_IMAGE_CHARS = 4_096
+_VERSION_SCAN_LIMITS = ScanLimits(
+    max_files=MAX_SCAN_FILES,
+    max_input_bytes=64 * 1024 * 1024,
+    max_items=_MAX_TOTAL_DECLARATIONS,
+    max_findings=_MAX_TOTAL_DECLARATIONS,
+    max_related_locations=_MAX_DECLARATIONS_PER_FILE,
+    max_report_bytes=64 * 1024 * 1024,
+)
 
 _KNOWN_JAVA_IMAGES = frozenset(
     {
@@ -172,9 +218,14 @@ def _append_declaration(
     declarations.append(declaration)
 
 
-def _read_scan_text(root: Path, path: Path) -> str:
+def _read_scan_text(root: Path, path: Path, budget: ScanBudget) -> str:
     try:
-        return read_limited_text(path, root=root, max_bytes=MAX_SCAN_BYTES)
+        return read_limited_text(
+            path,
+            root=root,
+            max_bytes=MAX_SCAN_BYTES,
+            budget=budget,
+        )
     except UnicodeDecodeError as exc:
         raise ValueError(f"invalid UTF-8 in configured file: {path}") from exc
 
@@ -321,11 +372,19 @@ def _major_from_literal(value: str) -> str | None:
     return match.group("major") if match is not None else None
 
 
-def _version_file_major(value: str) -> str | None:
+def parse_java_version_file_major(value: str) -> str | None:
+    """Return the Java major declared by one supported version-file value."""
+
+    stripped = value.strip()
+    if _AMBIGUOUS_VERSION_FILE_RE.search(stripped):
+        return None
     direct = _major_from_literal(value)
     if direct is not None:
         return direct
-    match = _DISTRIBUTION_VERSION_RE.search(value.strip())
+    marker = _JAVA_VERSION_MARKER_RE.search(stripped)
+    if marker is not None:
+        return marker.group("major")
+    match = _DISTRIBUTION_VERSION_RE.search(stripped)
     return _major_from_literal(match.group("version")) if match is not None else None
 
 
@@ -425,11 +484,19 @@ def _mask_gradle_comments(text: str) -> str:
     return "".join(output)
 
 
-def _scan_gradle(root: Path, path: Path) -> list[_Declaration]:
-    text = _read_scan_text(root, path)
+def _gradle_compatibility_major(value: str) -> str | None:
+    java_version = _GRADLE_JAVA_VERSION_RE.fullmatch(value.strip())
+    if java_version is not None:
+        return java_version.group("major")
+    return _major_from_literal(value)
+
+
+def _scan_gradle(root: Path, path: Path, budget: ScanBudget) -> list[_Declaration]:
+    text = _read_scan_text(root, path, budget)
     searchable = _mask_gradle_comments(text)
     declarations: list[_Declaration] = []
     locator = _OffsetLocator(root, path, text)
+    candidates: list[tuple[int, str, bool]] = []
     for match in _GRADLE_CALL_RE.finditer(text):
         # The call name remains visible only when it is code, not a comment or string.  Parse the
         # value from the original text so quoted literal majors remain supported.
@@ -437,16 +504,221 @@ def _scan_gradle(root: Path, path: Path) -> list[_Declaration]:
             continue
         raw_value = match.group("value")
         value_offset = match.start("value") + len(raw_value) - len(raw_value.lstrip())
+        candidates.append((value_offset, raw_value, False))
+    for match in _GRADLE_COMPATIBILITY_RE.finditer(text):
+        # Comments and string literals are blanked in ``searchable`` without moving offsets.
+        if not searchable[match.start("name") : match.end("name")].strip():
+            continue
+        line_start = searchable.rfind("\n", 0, match.start("name")) + 1
+        prefix = searchable[line_start : match.start("name")].rstrip()
+        # A bare or qualified property assignment is contract evidence. A preceding type-like
+        # token instead declares a local/helper variable that merely shares the Gradle property
+        # name (for example ``String sourceCompatibility = ...``).
+        if prefix and (prefix[-1].isalnum() or prefix[-1] in {"_", "$", "]", ">"}):
+            continue
+        raw_value = match.group("value")
+        candidates.append((match.start("value"), raw_value, True))
+
+    for value_offset, raw_value, compatibility in sorted(candidates):
         _append_declaration(
             declarations,
             _Declaration(
                 source="gradle",
                 location=locator.location(value_offset),
-                major=_major_from_literal(raw_value),
+                major=(
+                    _gradle_compatibility_major(raw_value)
+                    if compatibility
+                    else _major_from_literal(raw_value)
+                ),
             ),
             path,
         )
     return declarations
+
+
+def _xml_local_name(tag: object) -> str:
+    if not isinstance(tag, str):
+        return ""
+    return tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1]
+
+
+def _mask_xml_non_elements(text: str) -> str:
+    output = list(text)
+    for pattern in (
+        re.compile(r"<!--[\s\S]*?-->"),
+        re.compile(r"<!\[CDATA\[[\s\S]*?\]\]>", re.IGNORECASE),
+        re.compile(r"<\?(?!xml\b)[\s\S]*?\?>", re.IGNORECASE),
+    ):
+        for match in pattern.finditer(text):
+            for index in range(match.start(), match.end()):
+                if output[index] != "\n":
+                    output[index] = " "
+    return "".join(output)
+
+
+def _parse_maven_xml(text: str, path: Path) -> tuple[ET.Element, dict[int, int], str]:
+    searchable = _mask_xml_non_elements(text)
+    if re.search(r"<!\s*(?:DOCTYPE|ENTITY)\b", searchable, re.IGNORECASE):
+        raise ValueError(f"XML document type declarations are not supported: {path}")
+    try:
+        document = ET.fromstring(text)
+    except (ET.ParseError, RecursionError) as exc:
+        raise ValueError(f"invalid XML in configured Maven POM: {path}") from exc
+
+    elements: list[ET.Element] = []
+    stack: list[tuple[ET.Element, int]] = [(document, 0)]
+    while stack:
+        element, depth = stack.pop()
+        if depth > _MAX_XML_DEPTH:
+            raise ValueError(f"Maven POM nesting exceeds {_MAX_XML_DEPTH} levels: {path}")
+        elements.append(element)
+        if len(elements) > _MAX_XML_NODES:
+            raise ValueError(f"Maven POM exceeds {_MAX_XML_NODES} elements: {path}")
+        stack.extend((child, depth + 1) for child in reversed(list(element)))
+
+    tag_pattern = re.compile(
+        r"<\s*(?![/!?])(?P<name>[^\s/>]+)"
+    )
+    tokens = [
+        (_xml_local_name(match.group("name")), match.start())
+        for match in tag_pattern.finditer(searchable)
+    ]
+    if len(tokens) != len(elements) or any(
+        name != _xml_local_name(element.tag)
+        for (name, _), element in zip(tokens, elements, strict=True)
+    ):
+        raise ValueError(f"Maven POM source locations could not be resolved safely: {path}")
+    offsets = {
+        id(element): offset
+        for (_, offset), element in zip(tokens, elements, strict=True)
+    }
+    return document, offsets, searchable
+
+
+def _xml_declaration_major(element: ET.Element) -> str | None:
+    if list(element):
+        return None
+    return _major_from_literal(element.text or "")
+
+
+def _xml_value_offset(text: str, searchable: str, opening_offset: int) -> int:
+    quote: str | None = None
+    closing = opening_offset
+    while closing < len(searchable):
+        character = searchable[closing]
+        if quote is not None:
+            if character == quote:
+                quote = None
+        elif character in {"'", '"'}:
+            quote = character
+        elif character == ">":
+            break
+        closing += 1
+    if closing >= len(searchable):
+        return opening_offset
+    offset = closing + 1
+    while offset < len(text) and text[offset].isspace():
+        offset += 1
+    cdata_marker = "<![CDATA["
+    if text.startswith(cdata_marker, offset):
+        offset += len(cdata_marker)
+        while offset < len(text) and text[offset].isspace():
+            offset += 1
+    return offset
+
+
+def _scan_maven(root: Path, path: Path, budget: ScanBudget) -> list[_Declaration]:
+    text = _read_scan_text(root, path, budget)
+    document, offsets, searchable = _parse_maven_xml(text, path)
+    candidates: list[tuple[int, ET.Element]] = []
+    if _xml_local_name(document.tag) == "properties":
+        property_groups = (document,)
+    else:
+        property_groups = tuple(
+            child for child in document if _xml_local_name(child.tag) == "properties"
+        )
+    for properties in property_groups:
+        for child in properties:
+            if _xml_local_name(child.tag) in {
+                "java.version",
+                "maven.compiler.release",
+                "maven.compiler.source",
+                "maven.compiler.target",
+            }:
+                candidates.append((offsets[id(child)], child))
+
+    parents = {id(child): parent for parent in document.iter() for child in parent}
+
+    def in_profile(element: ET.Element) -> bool:
+        parent = parents.get(id(element))
+        while parent is not None:
+            if _xml_local_name(parent.tag) == "profile":
+                return True
+            parent = parents.get(id(parent))
+        return False
+
+    for plugin in document.iter():
+        if _xml_local_name(plugin.tag) != "plugin":
+            continue
+        if in_profile(plugin):
+            continue
+        children = list(plugin)
+        artifact_ids = [
+            child
+            for child in children
+            if _xml_local_name(child.tag) == "artifactId"
+            and not list(child)
+            and (child.text or "").strip() == "maven-compiler-plugin"
+        ]
+        if not artifact_ids:
+            continue
+        for configuration in plugin.iter():
+            if _xml_local_name(configuration.tag) != "configuration":
+                continue
+            for child in configuration:
+                if _xml_local_name(child.tag) in {"release", "source", "target"}:
+                    candidates.append((offsets[id(child)], child))
+
+    declarations: list[_Declaration] = []
+    locator = _OffsetLocator(root, path, text)
+    for opening_offset, element in sorted(candidates, key=lambda item: item[0]):
+        value_offset = _xml_value_offset(text, searchable, opening_offset)
+        _append_declaration(
+            declarations,
+            _Declaration(
+                source="maven",
+                location=locator.location(value_offset),
+                major=_xml_declaration_major(element),
+            ),
+            path,
+        )
+    return declarations
+
+
+def _scan_java_version_file(
+    root: Path,
+    path: Path,
+    cache: dict[Path, tuple[Location, str | None]],
+    budget: ScanBudget,
+) -> list[_Declaration]:
+    relative = path.relative_to(root)
+    cached = cache.get(relative)
+    if cached is not None:
+        location, major = cached
+        return [_Declaration("version_files", location, major)]
+    text = _read_scan_text(root, path, budget)
+    for line_number, line in enumerate(io.StringIO(text), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        column = line.find(stripped) + 1
+        location = _location(root, path, line_number, max(column, 1))
+        major = parse_java_version_file_major(stripped)
+        cache[relative] = (location, major)
+        return [_Declaration(source="version_files", location=location, major=major)]
+    location = _location(root, path, 1)
+    cache[relative] = (location, None)
+    return [_Declaration("version_files", location, None)]
 
 
 def _substitute_literal_args(value: str, arguments: Mapping[str, str]) -> str:
@@ -515,8 +787,8 @@ def _image_java_major(image: str) -> tuple[bool, str | None]:
     return True, leading.group("major") if leading is not None else None
 
 
-def _scan_dockerfile(root: Path, path: Path) -> list[_Declaration]:
-    text = _read_scan_text(root, path)
+def _scan_dockerfile(root: Path, path: Path, budget: ScanBudget) -> list[_Declaration]:
+    text = _read_scan_text(root, path, budget)
     arguments: dict[str, str] = {}
     declarations: list[_Declaration] = []
     seen_from = False
@@ -555,8 +827,8 @@ def _scan_dockerfile(root: Path, path: Path) -> list[_Declaration]:
     return declarations
 
 
-def _scan_compose(root: Path, path: Path) -> list[_Declaration]:
-    text = _read_scan_text(root, path)
+def _scan_compose(root: Path, path: Path, budget: ScanBudget) -> list[_Declaration]:
+    text = _read_scan_text(root, path, budget)
     declarations: list[_Declaration] = []
     for document in _yaml_documents(text, path):
         mappings = _MappingResolver()
@@ -605,7 +877,8 @@ def _declaration_from_version_file(
     workflow_path: Path,
     node: ScalarNode,
     result: ScanResult,
-    cache: dict[Path, _Declaration],
+    cache: dict[Path, tuple[Location, str | None]],
+    budget: ScanBudget,
     diagnostics: SourceDiagnostics | None = None,
 ) -> _Declaration:
     value = node.value.strip()
@@ -618,13 +891,14 @@ def _declaration_from_version_file(
     relative = version_path.relative_to(root)
     cached = cache.get(relative)
     if cached is not None:
-        return cached
+        location, major = cached
+        return _Declaration("workflows", location, major)
     result.scanned_files.add(relative)
     if diagnostics is not None:
         diagnostics.record_derived(relative)
     if len(result.scanned_files) > MAX_SCAN_FILES:
         raise ValueError(f"version file discovery exceeds {MAX_SCAN_FILES} files")
-    text = _read_scan_text(root, version_path)
+    text = _read_scan_text(root, version_path, budget)
     candidates: list[tuple[int, str, int]] = []
     for line_number, line in enumerate(io.StringIO(text), start=1):
         stripped = line.strip()
@@ -640,27 +914,25 @@ def _declaration_from_version_file(
         candidates.append((line_number, candidate, line.find(candidate) + 1))
         break
     if not candidates:
-        declaration = _Declaration("workflows", _location(root, version_path, 1), None)
-        cache[relative] = declaration
-        return declaration
+        location = _location(root, version_path, 1)
+        cache[relative] = (location, None)
+        return _Declaration("workflows", location, None)
     line_number, candidate, column = candidates[0]
-    declaration = _Declaration(
-        "workflows",
-        _location(root, version_path, line_number, max(column, 1)),
-        _version_file_major(candidate),
-    )
-    cache[relative] = declaration
-    return declaration
+    location = _location(root, version_path, line_number, max(column, 1))
+    major = parse_java_version_file_major(candidate)
+    cache[relative] = (location, major)
+    return _Declaration("workflows", location, major)
 
 
 def _scan_workflow(
     root: Path,
     path: Path,
     result: ScanResult,
-    version_file_cache: dict[Path, _Declaration],
+    version_file_cache: dict[Path, tuple[Location, str | None]],
+    budget: ScanBudget,
     diagnostics: SourceDiagnostics | None = None,
 ) -> list[_Declaration]:
-    text = _read_scan_text(root, path)
+    text = _read_scan_text(root, path, budget)
     declarations: list[_Declaration] = []
     for document in _yaml_documents(text, path):
         mappings = _MappingResolver()
@@ -711,6 +983,7 @@ def _scan_workflow(
                             version_file,
                             result,
                             version_file_cache,
+                            budget,
                             diagnostics,
                         ),
                         path,
@@ -762,8 +1035,8 @@ def _without_html_comments(line: str, in_comment: bool) -> tuple[str, bool]:
     return "".join(visible), in_comment
 
 
-def _scan_document(root: Path, path: Path) -> list[_Declaration]:
-    text = _read_scan_text(root, path)
+def _scan_document(root: Path, path: Path, budget: ScanBudget) -> list[_Declaration]:
+    text = _read_scan_text(root, path, budget)
     declarations: list[_Declaration] = []
     fence: tuple[str, int] | None = None
     in_comment = False
@@ -872,6 +1145,35 @@ def _group_locations(
     ]
 
 
+def _without_duplicate_workflow_version_files(
+    declarations: Sequence[_Declaration],
+) -> list[_Declaration]:
+    """Report a shared setup-java version file once while preserving source presence."""
+
+    direct = {
+        (
+            item.location.path,
+            item.location.line,
+            item.location.column,
+            item.major,
+        )
+        for item in declarations
+        if item.source == "version_files"
+    }
+    return [
+        item
+        for item in declarations
+        if item.source != "workflows"
+        or (
+            item.location.path,
+            item.location.line,
+            item.location.column,
+            item.major,
+        )
+        not in direct
+    ]
+
+
 def scan_version_contracts(
     root: Path,
     config: Mapping[str, Any],
@@ -881,9 +1183,9 @@ def scan_version_contracts(
     """Scan an explicitly configured Java major-version contract below ``root``.
 
     The optional ``versions.java`` mapping supplies ``expected`` and repository-relative
-    patterns for Gradle, Dockerfiles, Compose, GitHub Actions workflows, and documentation.
-    ``required`` names source groups that must contain at least one declaration. Dynamic
-    declarations are reported without retaining or displaying their values.
+    patterns for Gradle, Maven, ``.java-version``, Dockerfiles, Compose, GitHub Actions
+    workflows, and documentation. ``required`` names source groups that must contain at least one
+    declaration. Dynamic declarations are reported without retaining or displaying their values.
     """
 
     section = _java_config(config)
@@ -901,16 +1203,26 @@ def scan_version_contracts(
 
     result = ScanResult()
     declarations: list[_Declaration] = []
-    version_file_cache: dict[Path, _Declaration] = {}
+    version_file_cache: dict[Path, tuple[Location, str | None]] = {}
     first_candidate: dict[str, Path] = {}
+    budget = ScanBudget("version", "declarations", _VERSION_SCAN_LIMITS)
     scanners = {
-        "gradle": lambda path, source_diagnostics: _scan_gradle(root, path),
-        "dockerfiles": lambda path, source_diagnostics: _scan_dockerfile(root, path),
-        "compose": lambda path, source_diagnostics: _scan_compose(root, path),
-        "workflows": lambda path, source_diagnostics: _scan_workflow(
-            root, path, result, version_file_cache, source_diagnostics
+        "gradle": lambda path, source_diagnostics: _scan_gradle(root, path, budget),
+        "maven": lambda path, source_diagnostics: _scan_maven(root, path, budget),
+        "version_files": lambda path, source_diagnostics: _scan_java_version_file(
+            root, path, version_file_cache, budget
         ),
-        "docs": lambda path, source_diagnostics: _scan_document(root, path),
+        "dockerfiles": lambda path, source_diagnostics: _scan_dockerfile(root, path, budget),
+        "compose": lambda path, source_diagnostics: _scan_compose(root, path, budget),
+        "workflows": lambda path, source_diagnostics: _scan_workflow(
+            root,
+            path,
+            result,
+            version_file_cache,
+            budget,
+            source_diagnostics,
+        ),
+        "docs": lambda path, source_diagnostics: _scan_document(root, path, budget),
     }
     for source in _SOURCE_NAMES:
         patterns = _patterns(section, source)
@@ -942,7 +1254,8 @@ def scan_version_contracts(
 
     declarations = _deduplicate(declarations)
     present_sources = {declaration.source for declaration in declarations}
-    for (source, relative_path, observed), locations in _group_locations(declarations):
+    reported_declarations = _without_duplicate_workflow_version_files(declarations)
+    for (source, relative_path, observed), locations in _group_locations(reported_declarations):
         label = _SOURCE_LABELS[source]
         if observed == "dynamic":
             result.findings.append(
@@ -995,4 +1308,4 @@ def scan_version_contracts(
     return apply_rule_policy(result, config)
 
 
-__all__ = ["scan_version_contracts"]
+__all__ = ["parse_java_version_file_major", "scan_version_contracts"]

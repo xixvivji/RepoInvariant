@@ -39,4 +39,7 @@ default values. A severity change requires a fresh review.
 The environment and traceability references describe their rule-specific entity identity. Java
 identity also includes its source group and, where applicable, source file and observed major.
 The effective configuration and enabled scanner set are part of the separate baseline scope
-digest.
+digest. Explicitly selected experimental plugins publish namespaced codes such as
+`sample.todo:TODO001`; their installed distribution version, declared rules, data-only
+configuration, and severity overrides are also bound to that digest. See the
+[parser plugin API](../parser-plugin-api.md) for its separate validation and trust boundary.

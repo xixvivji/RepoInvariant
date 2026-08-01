@@ -1,7 +1,7 @@
 """RepoInvariant public package API with lazy model exports for safe CLI bootstrap."""
 
 __all__ = ["Finding", "Location", "ScanResult", "Severity"]
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 
 def __getattr__(name: str) -> object:

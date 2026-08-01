@@ -57,7 +57,7 @@ jobs:
           persist-credentials: false
       - name: Check repository contracts
         id: repoinvariant
-        uses: xixvivji/RepoInvariant@ea489aa32cba6eb31760070eecde543726a91caf # v0.4.0
+        uses: xixvivji/RepoInvariant@d045e7844f636b20473efeff4e9f62cbfcf16690 # v0.5.0
         with:
           path: .
           format: sarif

@@ -4,6 +4,8 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-01
+
 ### Added
 
 - Deterministic `init --detect` configuration generation and `doctor --strict` coverage gates for
@@ -30,7 +32,9 @@ All notable changes will be documented in this file. The project follows Semanti
 - Avoided Spring environment false positives when a placeholder is backed by a same-file static
   top-level YAML or `.properties` assignment; self-references and undefined placeholders remain
   consumers.
-- Updated the documented stable Action pin to the annotated `v0.4.0` release target.
+- Kept the 10,000-occurrence performance regression gate while allowing bounded hosted-runner CPU
+  variance under coverage tracing.
+- Pinned the documented Action to an immutable `v0.5.0` release source commit.
 
 ### Security
 

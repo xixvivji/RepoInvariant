@@ -41,7 +41,7 @@ dev = [
 ]
 
 [project.scripts]
-repoinvariant = "repoinvariant.cli:main"
+repoinvariant = "repoinvariant._entrypoint:main"
 
 [project.urls]
 Homepage = "https://github.com/xixvivji/RepoInvariant"

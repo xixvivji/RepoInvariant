@@ -21,6 +21,9 @@
     "versions": {
       "$ref": "#/$defs/versions"
     },
+    "plugins": {
+      "$ref": "#/$defs/plugins"
+    },
     "rules": {
       "$ref": "#/$defs/rules"
     }
@@ -256,6 +259,20 @@
             "**/build.gradle.kts"
           ]
         },
+        "maven": {
+          "description": "Maven POM files with recognized Java properties or compiler release declarations.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            "**/pom.xml"
+          ]
+        },
+        "version_files": {
+          "description": "Dedicated .java-version files.",
+          "$ref": "#/$defs/pathPatternList",
+          "default": [
+            "**/.java-version"
+          ]
+        },
         "dockerfiles": {
           "description": "Dockerfiles with recognized Java base images.",
           "$ref": "#/$defs/pathPatternList",
@@ -299,12 +316,14 @@
           "description": "Artifact classes that must contain at least one recognized static, dynamic, or ambiguous Java declaration.",
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 5,
+          "maxItems": 7,
           "default": [],
           "items": {
             "type": "string",
             "enum": [
               "gradle",
+              "maven",
+              "version_files",
               "dockerfiles",
               "compose",
               "workflows",
@@ -313,6 +332,79 @@
           }
         }
       }
+    },
+    "plugins": {
+      "description": "Data-only settings for installed scanner plugins. Configuration never activates a plugin; every plugin must also be selected explicitly on the CLI.",
+      "type": "object",
+      "maxProperties": 32,
+      "propertyNames": {
+        "maxLength": 64,
+        "pattern": "^[a-z][a-z0-9]{0,31}(?:[._-][a-z0-9][a-z0-9]{0,31})*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/pluginSettings"
+      }
+    },
+    "pluginSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "description": "Plugin-defined JSON-compatible data passed only after explicit selection.",
+          "type": "object",
+          "maxProperties": 1024,
+          "propertyNames": {
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/pluginConfigValue"
+          },
+          "default": {}
+        },
+        "rules": {
+          "description": "Severity overrides for local rule codes declared by this plugin.",
+          "type": "object",
+          "maxProperties": 128,
+          "propertyNames": {
+            "pattern": "^[A-Z][A-Z0-9]{0,31}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/severity"
+          },
+          "default": {}
+        }
+      }
+    },
+    "pluginConfigValue": {
+      "description": "One recursively bounded JSON-compatible plugin configuration value.",
+      "anyOf": [
+        {
+          "type": ["null", "boolean", "number"]
+        },
+        {
+          "type": "string",
+          "maxLength": 4096
+        },
+        {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/pluginConfigValue"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 1024,
+          "propertyNames": {
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/pluginConfigValue"
+          }
+        }
+      ]
     },
     "rules": {
       "description": "Per-finding severity overrides. Omitted rules retain their defaults.",

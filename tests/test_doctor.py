@@ -169,10 +169,13 @@ def test_doctor_json_reports_inventory_without_disclosing_paths_by_default(
         "dockerfiles": "no_matches",
         "docs": "all_ignored",
         "gradle": "empty_patterns",
+        "maven": "no_matches",
+        "version_files": "matched",
         "workflows": "matched",
     }
     _assert_hidden_path_collection(version_sources["workflows"]["matched"], count=1)
-    _assert_hidden_path_collection(version_sources["workflows"]["derived"], count=1)
+    _assert_hidden_path_collection(version_sources["workflows"]["derived"], count=0)
+    _assert_hidden_path_collection(version_sources["version_files"]["matched"], count=1)
 
     rules = _by_code(payload["rules"])
     assert rules["TRACE004"]["severity"] == "off"
@@ -234,6 +237,11 @@ def test_doctor_verbose_reports_sorted_matched_and_derived_paths(
         "paths": [".github/workflows/ci.yml"],
     }
     assert version_sources["workflows"]["derived"] == {
+        "count": 0,
+        "omitted_count": 0,
+        "paths": [],
+    }
+    assert version_sources["version_files"]["matched"] == {
         "count": 1,
         "omitted_count": 0,
         "paths": [".java-version"],

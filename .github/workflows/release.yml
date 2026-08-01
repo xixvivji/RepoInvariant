@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag (for example, v0.4.0)
+        description: Release tag (for example, v0.5.0)
         required: false
         type: string
       publish:
@@ -78,6 +78,8 @@ jobs:
         run: uv run --frozen ruff check .
       - name: Test
         run: uv run --frozen pytest --cov=repoinvariant --cov-report=term-missing --cov-fail-under=85
+      - name: Diagnose configured coverage
+        run: uv run --frozen repoinvariant doctor . --strict
       - name: Dogfood
         run: uv run --frozen repoinvariant check . --fail-on warning
       - name: Build source distribution and wheel from the source distribution

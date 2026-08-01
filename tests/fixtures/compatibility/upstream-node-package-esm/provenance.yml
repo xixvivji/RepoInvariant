@@ -1,0 +1,27 @@
+fixture: upstream-node-package-esm
+kind: immutable-upstream-syntax
+copied_bytes: true
+observed_at: "2026-08-01"
+observation_method: github-contents-api-at-pinned-commit
+source:
+  repository: https://github.com/nodejs/package-examples
+  commit: 01d632c10d89067a44c4c22b264b2c5a4effce5a
+  license: MIT
+  license_path: LICENSE
+files:
+  - source_path: guide/02-single-file-package/simple-esm/node_modules/my-logger/package.json
+    fixture_path: package.json
+    git_blob_sha: 54dcf8497a02cbe6d3dc4ef1b47ac9570b40c93a
+    sha256: 5f0aa62c05a3416fc6c487b7f2eddb87691208b3e7f87600ec9a0f5ecfadbc29
+    size_bytes: 151
+  - source_path: guide/02-single-file-package/simple-esm/node_modules/my-logger/logger.js
+    fixture_path: logger.js
+    git_blob_sha: da5c02f91d2a3a29f36faee469ec8b7b967a8f45
+    sha256: 651badc4953ade6e401caf0e712f516c1f8850e22be8351e64f4d0c6f376c617
+    size_bytes: 690
+  - source_path: LICENSE
+    fixture_path: LICENSE.upstream
+    git_blob_sha: 83c1fb9f1d90c4b4859858aa3fbe161ce2440145
+    sha256: 782ab5b8ae1540c1a2b102fdd00990ed268d4a3a98e90ad7fe724b489d7bb0f2
+    size_bytes: 1064
+purpose: Exercise Node.js package exports and ECMAScript module syntax.

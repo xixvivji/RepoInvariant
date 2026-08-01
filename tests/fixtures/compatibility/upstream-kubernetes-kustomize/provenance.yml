@@ -1,0 +1,22 @@
+fixture: upstream-kubernetes-kustomize
+kind: immutable-upstream-syntax
+copied_bytes: true
+observed_at: "2026-08-01"
+observation_method: github-contents-api-at-pinned-commit
+source:
+  repository: https://github.com/kubernetes/kubernetes
+  commit: a818af18fe29d999d6741234c8cd72709ef2f424
+  license: Apache-2.0
+  license_path: LICENSE
+files:
+  - source_path: hack/testdata/kustomize/deployment.yaml
+    fixture_path: k8s/deployment.yaml
+    git_blob_sha: 13c096f487fa2185ecae27353dc63c95ba293631
+    sha256: 738c805201691f8de3dd6c329a2c12cde8707f550c2a99867205f43604bebb82
+    size_bytes: 782
+  - source_path: LICENSE
+    fixture_path: LICENSE.upstream
+    git_blob_sha: d645695673349e3947e8e5ae42332d0ac3164cd7
+    sha256: cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+    size_bytes: 11358
+purpose: Exercise Kubernetes Deployment environment entries and command interpolation syntax.

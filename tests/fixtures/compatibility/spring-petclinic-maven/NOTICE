@@ -1,0 +1,6 @@
+Spring Petclinic Maven syntax snapshot
+
+The bytes in pom.xml are copied from lines 17-38 of spring-projects/spring-petclinic's
+pom.xml at commit 88e37c15cf6fc8490b01bc3e8e2c800cec1ac272. The source declares the
+Apache License, Version 2.0. The complete license text is distributed in this repository's
+top-level LICENSE file. No endorsement by the upstream project is implied.

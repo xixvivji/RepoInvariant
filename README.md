@@ -14,15 +14,15 @@ across your repository still agree. It focuses on three expensive, repeatable fa
 - environment variables drifting between `.env.example`, Docker Compose, Kubernetes,
   GitHub Actions, and Spring configuration;
 - requirement IDs disappearing between Markdown, OpenAPI `x-feature-id`, and tests;
-- a declared Java major drifting between Gradle toolchains, container images, CI, and
-  structured documentation.
+- a declared Java major drifting between Gradle/Maven build settings, `.java-version`, container
+  images, CI, and structured documentation.
 
 It reports exact evidence instead of guessing intent. No API key, LLM, or source upload is
 required.
 
 ## Status
 
-RepoInvariant `v0.4.0` is a public alpha. The configuration and finding codes may change
+RepoInvariant `v0.5.0` is a public alpha. The configuration and finding codes may change
 before `v1.0.0`. Pin an exact commit SHA when using the GitHub Action.
 
 ## GitHub Action
@@ -49,11 +49,13 @@ jobs:
         with:
           persist-credentials: false
       - name: Check repository contracts
-        uses: xixvivji/RepoInvariant@31f7943ef9841a4868a59f16480c8e02e3a1b083 # v0.4.0
+        uses: xixvivji/RepoInvariant@d045e7844f636b20473efeff4e9f62cbfcf16690 # v0.5.0
 ```
 
 The action installs only the source bundled with the pinned action revision. It does not transmit
-repository contents or require secrets.
+repository contents or require secrets. For SARIF Code Scanning, required checks, branch rules,
+fork safety, and baseline protection, follow the
+[complete GitHub installation checklist](docs/github-installation.md).
 
 | Input | Default | Description |
 |---|---|---|
@@ -63,6 +65,7 @@ repository contents or require secrets.
 | `output` | empty | Optional repository-relative report path. |
 | `baseline` | empty | Optional repository-relative adoption baseline. |
 | `fail-on` | `error` | Blocking threshold: `error` or `warning`. |
+| `strict` | `false` | Run `doctor --strict` before the contract check. |
 | `no-env` | `false` | Skip environment-contract checks. |
 | `no-features` | `false` | Skip feature-traceability checks. |
 | `no-versions` | `false` | Skip configured Java version-contract checks. |
@@ -88,7 +91,8 @@ Then initialize and scan a repository:
 
 ```bash
 cd /path/to/your/repository
-repoinvariant init
+repoinvariant init --detect
+repoinvariant doctor . --strict --verbose
 repoinvariant check .
 ```
 
@@ -154,6 +158,8 @@ versions:
   java:
     expected: "21"
     gradle: ["**/build.gradle", "**/build.gradle.kts"]
+    maven: ["**/pom.xml"]
+    version_files: ["**/.java-version"]
     dockerfiles: ["**/Dockerfile", "**/Dockerfile.*"]
     compose:
       - "**/compose*.yml"
@@ -163,7 +169,7 @@ versions:
     workflows: [.github/workflows/*.yml, .github/workflows/*.yaml]
     docs: [README.md, docs/**/*.md]
     ignore: [examples/legacy/**]
-    required: [gradle, workflows, docs]
+    required: [gradle, maven, version_files, workflows, docs]
 
 rules:
   ENV001: error
@@ -201,10 +207,11 @@ source locations remain exact, but arbitrary matched repository text never reach
 artifacts.
 
 `versions.java.expected` is an opt-in canonical Java major, not an adoption baseline. It must be a
-quoted major such as `"17"` or `"21"`. RepoInvariant recognizes literal Gradle toolchains, known
-Java Docker and Compose image tags, `actions/setup-java`, and structured Markdown declarations.
-Dynamic expressions are reported without printing their contents. Add a source name to `required`
-only when that artifact class must declare the version.
+quoted major such as `"17"` or `"21"`. RepoInvariant recognizes literal Gradle toolchains and
+compatibility declarations, Maven compiler properties/configuration, `.java-version`, known Java
+Docker and Compose image tags, `actions/setup-java`, and structured Markdown declarations. Dynamic
+expressions are reported without printing their contents. Add a source name to `required` only when
+that artifact class must declare the version.
 
 Each finding code can be set to `error`, `warning`, or `off`. This makes staged adoption explicit:
 start a noisy rule as a warning, reduce the accepted backlog, then promote it to an error. Quote
@@ -216,13 +223,14 @@ Use `doctor` to inspect the effective scan before making `check` a merge gate:
 
 ```text
 repoinvariant doctor [path] [--config FILE] [--baseline FILE]
-                       [--format text|json] [--verbose]
+                       [--format text|json] [--verbose] [--strict]
+                       [--plugin ID ...]
                        [--no-env] [--no-features] [--no-versions]
 ```
 
 ```bash
 repoinvariant doctor .
-repoinvariant doctor . --verbose
+repoinvariant doctor . --strict --verbose
 repoinvariant doctor . --format json
 ```
 
@@ -239,16 +247,17 @@ not walk the rest of the repository merely to list files that were never in scan
 never prints file contents, discovered secret values, custom identifier matches, or baseline hash
 values.
 
-A completed diagnosis returns exit code `0`, including when a source range is empty, a rule is
-`off`, a scanner is disabled or not configured, or a baseline has a different scan scope. Invalid
-configuration or baseline data and unsafe scanner input return exit code `2`; `doctor` does not
-use exit code `1`. Run `repoinvariant check` for the merge-gate decision and contract-failure exit
-code.
+Without `--strict`, a completed diagnosis returns exit code `0`, including when a source range is
+empty, a rule is `off`, or a scanner is disabled. `--strict` returns exit code `1` when an effective
+scanner scans no files or a required Java source group contains no recognized declaration. Invalid
+configuration or baseline data and unsafe scanner input return exit code `2`. `check` remains the
+contract-finding merge gate; strict doctor validates that the intended gate actually has coverage.
 
 ## Adopt an existing repository
 
 ```text
 repoinvariant baseline [path] [--config FILE] [--output FILE] [--force]
+                         [--plugin ID ...]
                          [--no-env] [--no-features] [--no-versions]
 ```
 
@@ -327,7 +336,7 @@ RepoInvariant deliberately does not:
 - decide whether two differently worded requirements mean the same thing;
 - modify repository files automatically;
 - compare live infrastructure or databases;
-- print secret values found in configuration;
+- print secret values found by its built-in scanners;
 - claim full OpenAPI, Compose, Kubernetes, or Spring validation;
 - execute Gradle, resolve workflow matrices, or infer Java versions from arbitrary image names and
   prose.
@@ -341,21 +350,28 @@ requirement patterns run with a timeout and one shared matching-time budget. Fil
 writes use no-follow directory descriptors so a concurrent symlink swap cannot redirect them
 outside the repository.
 
-## Synthetic compatibility fixtures and parser extensions
+## Compatibility fixtures and parser extensions
 
-Version parsers are exercised offline against small, independently authored fixtures informed by
-file layouts observed in Spring's Docker guide, Apache Fineract, and Testcontainers for Java. Each
-fixture records the upstream repository, immutable commit SHA, license, exact observed paths and
-blob SHAs, and the mapping to its local files; no upstream source or documentation bytes are
-vendored. These fixtures test the local parser model, not byte-for-byte or syntax-level
-compatibility with the referenced projects. See
+Parser compatibility is exercised offline against both independently authored structural fixtures
+and licensed byte-for-byte syntax snapshots. The built-in scanners consume the Spring properties,
+Kubernetes manifest, and Maven compiler-properties snapshots. Node ESM/package metadata and Python
+project metadata are provenance fixtures that explicitly assert the current unsupported
+`init --detect` boundary; their presence does not claim Node or Python scanner support. Every copied
+file or range is tied to an immutable upstream commit and blob, records its length and SHA-256, and
+carries the applicable attribution or license. CI never fetches upstream content. See
 [`tests/fixtures/compatibility/THIRD_PARTY_NOTICES.md`](tests/fixtures/compatibility/THIRD_PARTY_NOTICES.md)
-for provenance.
+for exact provenance and the compatibility boundary.
 
-A third-party parser API is intentionally not public yet. Installed Python plugins are executable
-code, so safe activation, bounded repository access, namespaced rules, baseline scope, and failure
-redaction need an explicit contract. The pre-v1 design and completion gate are documented in
-[`docs/parser-plugin-api.md`](docs/parser-plugin-api.md).
+Trusted installed scanners can extend RepoInvariant through the experimental
+`repoinvariant.scanners.v1` entry-point API. Plugins remain inert until explicitly selected with a
+repeatable `--plugin ID` on `check`, `baseline`, or `doctor`; configuration alone never activates
+code. The core provides a bounded no-follow repository view, validates and namespaces all plugin
+evidence, redacts unexpected failures, and binds selected plugin identity and configuration to
+adoption baselines. Plugins run in-process and are not sandboxed, so install only reviewed,
+version-pinned distributions. A selected plugin can access the process, filesystem, environment,
+and network, and the core cannot determine whether plugin-authored finding text contains sensitive
+data. See the complete
+[`parser plugin API`](docs/parser-plugin-api.md) contract and sample distribution.
 
 ## Roadmap
 
@@ -363,11 +379,10 @@ redaction need an explicit contract. The pre-v1 design and completion gate are d
 - [x] Requirement → OpenAPI → test traceability
 - [x] Text, JSON, Markdown, and SARIF reports
 - [x] Composite GitHub Action
-- [x] Java version contracts across Gradle, Docker, CI, and documentation
-- [ ] Reusable parser plugin API
+- [x] Java version contracts across Gradle, Maven, `.java-version`, Docker, CI, and documentation
+- [x] Experimental reusable parser plugin API
 - [x] PyPI trusted publishing and provenance-attested release automation
-- [ ] Licensed upstream-syntax compatibility snapshots from external projects (pinned synthetic
-      structural fixtures are in place)
+- [x] Licensed upstream-syntax compatibility snapshots from external projects
 
 See [CONTRIBUTING.md](https://github.com/xixvivji/RepoInvariant/blob/main/CONTRIBUTING.md)
 to help shape future releases. Participation is governed by the

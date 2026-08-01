@@ -1,0 +1,13 @@
+version: 1
+versions:
+  java:
+    expected: "17"
+    gradle: []
+    maven: [pom.xml]
+    version_files: []
+    dockerfiles: []
+    compose: []
+    workflows: []
+    docs: []
+    ignore: []
+    required: [maven]

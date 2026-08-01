@@ -13,12 +13,20 @@ reports, or baselines.
 | Compose | `$NAME`, `${NAME}` and Compose operators in YAML scalars; bare `environment` entries; repository-local `env_file` | Single-quoted interpolation, `$${ESCAPED}`, dynamic `env_file`, and nested interpolation |
 | Kubernetes | `containers` or `initContainers` `env[].name`; literal `env[].value`; exact `${NAME}` in YAML scalars | `envFrom`, Kubernetes `$(NAME)`, operator placeholders, and Kubernetes schema validation |
 | GitHub Actions | Case-sensitive `secrets.NAME` and `vars.NAME` references in YAML scalars | `env.NAME`, bracket notation, dynamic indexing, and literal `env:` keys |
-| Spring | `${NAME}` and `${NAME:default}` in selected YAML scalars and `.properties` lines | SpEL, `$NAME`, nested placeholders, properties continuation, and escape semantics |
+| Spring | `${NAME}` and `${NAME:default}` in selected YAML scalars and `.properties` lines | Same-file static property definitions, SpEL, `$NAME`, nested placeholders, properties continuation, and escape semantics |
 
 RepoInvariant parses every selected Compose scalar, not only service environment fields, and every
 selected workflow scalar, not only expressions. This deliberately favors simple repository-wide
 evidence and can count an example or description string. Kubernetes input is similarly located by
 tree shape rather than by validating a Kubernetes object schema.
+
+For Spring input, a placeholder is not treated as external environment consumption when the same
+file's effective definition for that name is a static literal property: a top-level YAML key such as
+`database: h2`, or a `.properties` assignment such as `database=h2`, satisfies `${database}` in
+that file. For duplicate `.properties` names, the last assignment determines whether suppression
+applies, so a final `DB_URL=${DB_URL}` remains consumer evidence. An undefined uppercase
+placeholder or a nested YAML key also remains consumer evidence. RepoInvariant does not resolve
+imports or properties across files.
 
 Contract assignments have these boundaries:
 
@@ -77,6 +85,8 @@ services:
 With no `APP_PORT` entry in a selected contract file, this triggers ENV001. Add the declaration to
 the canonical contract or explicitly ignore the name. A literal target such as
 `APP_PORT: "8080"` is not external consumption and does not trigger the rule.
+Likewise, a Spring placeholder backed by a same-file static property as described above is not in
+the consumer set and does not trigger ENV001.
 
 The baseline entity is derived from the variable name. ENV001 can coexist with ENV003 when
 uncontracted consumers also declare conflicting fallbacks.
@@ -127,3 +137,11 @@ unsafe `env_file` paths, oversized files, invalid UTF-8, or symlinks acceptable.
 the entire environment scanner. Configured source globs and `env.ignore` bound which files can
 contribute evidence; unlike feature traceability, this scanner has no built-in directory-ignore
 list.
+
+One environment scan is limited to 10,000 unique files, 64 MiB of aggregate UTF-8 input, 100,000
+parsed occurrences, 10,000 findings, and 8 MiB of encoded finding evidence. Each finding retains at
+most 100 related locations; additional locations are omitted deterministically and the hint reports
+the omitted count. Exceeding any other aggregate limit is a command error with exit code `2`, before
+an unbounded report is constructed. The separate 2 MiB per-file limit still applies.
+Each selected YAML file is also limited to 20,000 aggregate nodes across all documents and 100
+nesting levels; empty documents count toward the aggregate work budget.

@@ -4,6 +4,57 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-01
+
+### Added
+
+- Deterministic `init --detect` configuration generation and `doctor --strict` coverage gates for
+  empty effective scanners and missing required Java declarations.
+- A backward-compatible Action `strict` input that runs the same bounded strict diagnosis before
+  the contract check, preventing empty configured coverage from passing a required workflow gate.
+- Strict coverage diagnosis in both continuous-integration and release validation workflows.
+- Java-major declarations from Maven compiler properties/configuration, Gradle
+  `sourceCompatibility`/`targetCompatibility`, and `.java-version` files.
+- An experimental, explicitly selected installed parser-plugin API with a bounded repository view,
+  namespaced rules, validated evidence, and adoption-baseline scope binding.
+- A complete GitHub installation checklist and fork-safe SARIF upload to GitHub Code Scanning.
+- Licensed, immutable upstream-syntax fixtures covering Spring, Node, Python, and Kubernetes forms,
+  with deterministic offline provenance and performance regression coverage. Spring, Kubernetes,
+  and Maven forms exercise built-in scanners; Node and Python pin the unsupported detection boundary.
+- Aggregate environment-scan limits for input bytes, occurrences, findings, related locations, and
+  encoded report evidence.
+
+### Changed
+
+- Extended the default Java scan scope with Maven POM and `.java-version` patterns. Existing
+  version-enabled adoption baselines intentionally require review and regeneration because their
+  scan scope changed.
+- Avoided Spring environment false positives when a placeholder is backed by a same-file static
+  top-level YAML or `.properties` assignment; self-references and undefined placeholders remain
+  consumers.
+- Kept the 10,000-occurrence performance regression gate while allowing bounded hosted-runner CPU
+  variance under coverage tracing.
+- Pinned the documented Action to an immutable `v0.5.0` release source commit.
+
+### Security
+
+- Kept plugin configuration data-only: installed code runs only after explicit CLI selection,
+  unexpected load/scan exceptions are redacted, and malformed or unbounded evidence fails closed.
+- Isolated CLI and selected-plugin imports from working-tree, scan-root, and `PYTHONPATH` module
+  shadows, including preloaded and parent-visible entry-point targets, before plugin execution.
+- Documented that an explicitly selected in-process plugin controls its evidence text and can access
+  the process, filesystem, environment, and network; built-in no-network and secret-redaction
+  guarantees do not sandbox third-party code.
+- Bounded aggregate environment evidence before report construction and omitted excess related
+  locations deterministically without exposing configuration values.
+- Bounded aggregate Java-version input, declarations, findings, related locations, and encoded
+  evidence; Maven XML rejects DTDs, unsafe source-location ambiguity, excessive depth, and
+  excessive element counts before reporting.
+- Limited Code Scanning writes to pushes and same-repository pull requests while retaining a
+  read-only scan and SARIF artifact for fork pull requests.
+- Failed closed before emitting SARIF beyond GitHub Code Scanning's 25,000-result or 10 MiB
+  compressed-file ingestion limits, with stable rule metadata independent of finding evidence.
+
 ## [0.4.0] - 2026-07-31
 
 ### Added

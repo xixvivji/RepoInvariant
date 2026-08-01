@@ -84,6 +84,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
 # existing v0.3 repository, even when the scanner is not configured.
 VERSION_JAVA_DEFAULTS: dict[str, Any] = {
     "gradle": ["**/build.gradle", "**/build.gradle.kts"],
+    "maven": ["**/pom.xml"],
+    "version_files": ["**/.java-version"],
     "dockerfiles": ["**/Dockerfile", "**/Dockerfile.*"],
     "compose": [
         "**/compose*.yml",
@@ -181,7 +183,7 @@ class ConfigError(ValueError):
     """Raised when a repository configuration cannot be interpreted safely."""
 
 
-_TOP_LEVEL_KEYS = frozenset({"version", "env", "features", "versions", "rules"})
+_TOP_LEVEL_KEYS = frozenset({"version", "env", "features", "versions", "plugins", "rules"})
 _ENV_KEYS = frozenset({"contracts", "compose", "kubernetes", "workflows", "spring", "ignore"})
 _FEATURE_KEYS = frozenset(
     {
@@ -199,6 +201,8 @@ _JAVA_VERSION_KEYS = frozenset(
     {
         "expected",
         "gradle",
+        "maven",
+        "version_files",
         "dockerfiles",
         "compose",
         "workflows",
@@ -207,8 +211,16 @@ _JAVA_VERSION_KEYS = frozenset(
         "required",
     }
 )
-_VERSION_SOURCES = frozenset({"gradle", "dockerfiles", "compose", "workflows", "docs"})
+_VERSION_SOURCES = frozenset(
+    {"gradle", "maven", "version_files", "dockerfiles", "compose", "workflows", "docs"}
+)
 _JAVA_MAJOR_RE = re.compile(r"^(?:[1-9][0-9]{0,2})$", re.ASCII)
+_PLUGIN_ID_RE = re.compile(
+    r"^[a-z][a-z0-9]{0,31}(?:[._-][a-z0-9][a-z0-9]{0,31})*$",
+    re.ASCII,
+)
+_PLUGIN_RULE_RE = re.compile(r"^[A-Z][A-Z0-9]{0,31}$", re.ASCII)
+_PLUGIN_SETTING_KEYS = frozenset({"config", "rules"})
 _RULE_KEYS = frozenset(
     {
         "ENV001",
@@ -311,6 +323,16 @@ def _normalize_yaml_scalars(config: dict[str, Any]) -> None:
         for code, value in rules.items():
             if value is False:
                 rules[code] = "off"
+    plugins = config.get("plugins")
+    if isinstance(plugins, dict):
+        for settings in plugins.values():
+            if not isinstance(settings, dict):
+                continue
+            plugin_rules = settings.get("rules")
+            if isinstance(plugin_rules, dict):
+                for code, value in plugin_rules.items():
+                    if value is False:
+                        plugin_rules[code] = "off"
 
 
 def _validate_structure(
@@ -387,6 +409,52 @@ def _preflight_override_keys(config: Mapping[str, Any]) -> None:
         java = versions.get("java")
         if isinstance(java, Mapping):
             _reject_unknown_keys(java, _JAVA_VERSION_KEYS, "versions.java")
+    plugins = config.get("plugins")
+    if isinstance(plugins, Mapping):
+        for plugin_id, settings in plugins.items():
+            if isinstance(plugin_id, str) and isinstance(settings, Mapping):
+                _reject_unknown_keys(settings, _PLUGIN_SETTING_KEYS, f"plugins.{plugin_id}")
+
+
+def _validate_plugin_config_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    budget: list[int] | None = None,
+) -> None:
+    """Validate the data-only configuration passed to an explicitly selected plugin."""
+
+    budget = budget if budget is not None else [0]
+    budget[0] += 1
+    if budget[0] > 10_000:
+        raise ConfigError("plugin configuration contains too many values")
+    if depth > 32:
+        raise ConfigError("plugin configuration nesting exceeds 32 levels")
+    if value is None or type(value) in {bool, int, float}:
+        if isinstance(value, float) and not (-float("inf") < value < float("inf")):
+            raise ConfigError("plugin configuration numbers must be finite")
+        return
+    if isinstance(value, str):
+        if len(value) > 4_096:
+            raise ConfigError("plugin configuration strings must not exceed 4096 characters")
+        return
+    if isinstance(value, list):
+        if len(value) > 1_024:
+            raise ConfigError("plugin configuration lists must not exceed 1024 items")
+        for item in value:
+            _validate_plugin_config_value(item, depth=depth + 1, budget=budget)
+        return
+    if isinstance(value, Mapping):
+        if len(value) > 1_024:
+            raise ConfigError("plugin configuration mappings must not exceed 1024 entries")
+        for key, item in value.items():
+            if not isinstance(key, str) or not key or len(key) > 128:
+                raise ConfigError(
+                    "plugin configuration keys must be non-empty strings up to 128 characters"
+                )
+            _validate_plugin_config_value(item, depth=depth + 1, budget=budget)
+        return
+    raise ConfigError("plugin configuration must contain only JSON-compatible values")
 
 
 def _validate_relative_pattern(pattern: str, label: str) -> None:
@@ -451,7 +519,16 @@ def validate_config(config: Mapping[str, Any]) -> None:
             raise ConfigError(
                 "'versions.java.expected' must be a quoted canonical major from '1' to '999'"
         )
-        for key in ("gradle", "dockerfiles", "compose", "workflows", "docs", "ignore"):
+        for key in (
+            "gradle",
+            "maven",
+            "version_files",
+            "dockerfiles",
+            "compose",
+            "workflows",
+            "docs",
+            "ignore",
+        ):
             _string_list(java, key)
             for pattern in java.get(key, []):
                 _validate_relative_pattern(pattern, f"versions.java.{key}")
@@ -468,6 +545,42 @@ def validate_config(config: Mapping[str, Any]) -> None:
                 + ", ".join(map(repr, unknown_sources))
             )
 
+    if "plugins" in config:
+        plugins = config["plugins"]
+        if not isinstance(plugins, Mapping):
+            raise ConfigError("'plugins' must be a mapping")
+        if len(plugins) > 32:
+            raise ConfigError("'plugins' must not contain more than 32 entries")
+        for plugin_id, settings in plugins.items():
+            if (
+                not isinstance(plugin_id, str)
+                or len(plugin_id) > 64
+                or not _PLUGIN_ID_RE.fullmatch(plugin_id)
+            ):
+                raise ConfigError("plugin IDs must be safe lowercase identifiers")
+            if not isinstance(settings, Mapping):
+                raise ConfigError(f"'plugins.{plugin_id}' must be a mapping")
+            _reject_unknown_keys(settings, _PLUGIN_SETTING_KEYS, f"plugins.{plugin_id}")
+            plugin_config = settings.get("config", {})
+            if not isinstance(plugin_config, Mapping):
+                raise ConfigError(f"'plugins.{plugin_id}.config' must be a mapping")
+            _validate_plugin_config_value(plugin_config)
+            plugin_rules = settings.get("rules", {})
+            if not isinstance(plugin_rules, Mapping):
+                raise ConfigError(f"'plugins.{plugin_id}.rules' must be a mapping")
+            if len(plugin_rules) > 128:
+                raise ConfigError(
+                    f"'plugins.{plugin_id}.rules' must not contain more than 128 entries"
+                )
+            for code, value in plugin_rules.items():
+                if not isinstance(code, str) or not _PLUGIN_RULE_RE.fullmatch(code):
+                    raise ConfigError(f"'plugins.{plugin_id}.rules' contains an invalid rule code")
+                if not isinstance(value, str) or value not in _RULE_VALUES:
+                    raise ConfigError(
+                        f"'plugins.{plugin_id}.rules.{code}' must be "
+                        "'error', 'warning', or 'off'"
+                    )
+
     for section_name, keys in _PATH_LISTS.items():
         section = env if section_name == "env" else features
         for key in keys:
@@ -479,7 +592,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
         raise ConfigError("'rules' must be a mapping")
     _reject_unknown_keys(rules, _RULE_KEYS, "rules")
     for code, value in rules.items():
-        if value not in _RULE_VALUES:
+        if not isinstance(value, str) or value not in _RULE_VALUES:
             raise ConfigError(f"'rules.{code}' must be 'error', 'warning', or 'off'")
 
 

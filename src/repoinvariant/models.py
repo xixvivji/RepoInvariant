@@ -98,7 +98,14 @@ class ScanResult:
                 rank[item.severity],
                 item.location.path.as_posix() if item.location else "",
                 item.location.line if item.location else 0,
+                item.location.column if item.location else 0,
                 item.code,
                 item.message,
+                (item.hint is not None, item.hint or ""),
+                tuple(
+                    (location.path.as_posix(), location.line, location.column)
+                    for location in item.related
+                ),
+                (item.baseline_key is not None, item.baseline_key or ""),
             ),
         )

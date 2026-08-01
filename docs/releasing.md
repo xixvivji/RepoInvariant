@@ -20,20 +20,30 @@ eligible reviewer. The release workflow grants `id-token: write` only to the pub
 
 1. Start `release/X.Y.Z` from `develop`.
 2. Set `__version__` in `src/repoinvariant/__init__.py` to `X.Y.Z` (package metadata reads it).
-3. Move the changelog entries from Unreleased to `[X.Y.Z] - YYYY-MM-DD`.
-4. Run:
+3. Move the changelog entries from Unreleased to `[X.Y.Z] - YYYY-MM-DD`, update the README status
+   and release-workflow example, and update the baseline fixture's recorded tool version.
+4. Commit that release preparation, then pin the README and copyable GitHub workflow examples to
+   that immutable commit SHA. Keep the embedded installation workflow byte-for-byte synchronized
+   with `examples/github/repoinvariant.yml`.
+5. Run:
 
    ```bash
+   uv lock --check
    uv sync --frozen --extra dev
-   uv run ruff check .
-   uv run pytest --cov=repoinvariant --cov-fail-under=85
-   uv run repoinvariant check . --fail-on warning
+   uv run --frozen ruff check .
+   uv run --frozen pytest --cov=repoinvariant --cov-fail-under=85
+   uv run --frozen repoinvariant doctor . --strict
+   uv run --frozen repoinvariant check . --fail-on warning
    uv build --no-build-isolation
-   uv run twine check --strict dist/*
+   uv run --frozen twine check --strict dist/*
+   actionlint
    ```
 
-5. Open the release pull request into `main` and wait for CI.
-6. Merge it, then create and push an annotated tag:
+   Run `actionlint` when it is installed; GitHub still performs its own workflow syntax validation
+   on the release pull request.
+
+6. Open the release pull request into `main` and wait for CI.
+7. Merge it, then create and push an annotated tag:
 
    ```bash
    git switch main
@@ -49,9 +59,9 @@ eligible reviewer. The release workflow grants `id-token: write` only to the pub
    second workflow; the dispatch that created it continues through provenance and publishing.
    Never dispatch publishing from another branch or reuse a published tag.
 
-7. Approve the protected `pypi` environment deployment.
-8. Verify the PyPI files, attestations, and GitHub release assets.
-9. Merge `main` back into `develop` and delete `release/X.Y.Z`.
+8. Approve the protected `pypi` environment deployment.
+9. Verify the PyPI files, attestations, and GitHub release assets.
+10. Merge `main` back into `develop` and delete `release/X.Y.Z`.
 
 The workflow refuses a tag whose value differs from the package `__version__`. PyPI Trusted
 Publishing generates short-lived credentials and distribution attestations; no PyPI token belongs

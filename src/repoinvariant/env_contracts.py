@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,7 @@ from repoinvariant.filesystem import (
 )
 from repoinvariant.models import Finding, Location, ScanResult, Severity
 from repoinvariant.policy import apply_rule_policy
+from repoinvariant.resource_budget import ScanBudget, ScanLimits
 
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _DOTENV_LINE_RE = re.compile(
@@ -39,8 +42,19 @@ _SPRING_REFERENCE_RE = re.compile(
     r"(?<!\$)\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
     r"(?::(?P<default>[^{}]*))?\}"
 )
+_SPRING_PROPERTY_ASSIGNMENT_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=|:)\s*(?P<value>.*)$"
+)
 _MAX_YAML_DEPTH = 100
 _MAX_YAML_NODES = 20_000
+_ENV_SCAN_LIMITS = ScanLimits(
+    max_files=MAX_SCAN_FILES,
+    max_input_bytes=64 * 1024 * 1024,
+    max_items=100_000,
+    max_findings=10_000,
+    max_related_locations=100,
+    max_report_bytes=8 * 1024 * 1024,
+)
 
 _DEFAULT_PATTERNS: dict[str, tuple[str, ...]] = {
     "contracts": (".env", ".env.example", ".env.sample", ".env.template"),
@@ -113,9 +127,14 @@ def _normalize_dotenv_value(value: str) -> str:
     return value
 
 
-def _read_scan_text(root: Path, path: Path) -> str:
+def _read_scan_text(root: Path, path: Path, budget: ScanBudget) -> str:
     try:
-        return read_limited_text(path, root=root, max_bytes=MAX_SCAN_BYTES)
+        return read_limited_text(
+            path,
+            root=root,
+            max_bytes=MAX_SCAN_BYTES,
+            budget=budget,
+        )
     except UnicodeDecodeError as exc:
         raise ValueError(f"invalid UTF-8 in configured file: {path}") from exc
 
@@ -133,9 +152,16 @@ def _location(root: Path, path: Path, line: int, column: int = 1) -> Location:
     return Location(path=relative if relative is not None else path, line=line, column=column)
 
 
-def _parse_dotenv(root: Path, path: Path) -> list[_Occurrence]:
+def _append_occurrence(
+    occurrences: list[_Occurrence], occurrence: _Occurrence, budget: ScanBudget
+) -> None:
+    budget.record_item()
+    occurrences.append(occurrence)
+
+
+def _parse_dotenv(root: Path, path: Path, budget: ScanBudget) -> list[_Occurrence]:
     occurrences: list[_Occurrence] = []
-    text = _read_scan_text(root, path)
+    text = _read_scan_text(root, path, budget)
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
@@ -150,31 +176,80 @@ def _parse_dotenv(root: Path, path: Path) -> list[_Occurrence]:
             if raw_value:
                 digest = _default_digest(_normalize_dotenv_value(value or ""))
         column = raw_line.find(name) + 1
-        occurrences.append(
-            _Occurrence(name, _location(root, path, line_number, max(column, 1)), digest)
+        _append_occurrence(
+            occurrences,
+            _Occurrence(name, _location(root, path, line_number, max(column, 1)), digest),
+            budget,
         )
     return occurrences
 
 
 def _yaml_documents(text: str, path: Path) -> list[Node]:
     try:
-        return [document for document in yaml.compose_all(text, Loader=yaml.SafeLoader) if document]
+        documents: list[Node] = []
+        node_budget = [0]
+        for document in yaml.compose_all(text, Loader=yaml.SafeLoader):
+            if document is None:
+                node_budget[0] += 1
+                if node_budget[0] > _MAX_YAML_NODES:
+                    raise ValueError(f"YAML input exceeds {_MAX_YAML_NODES} nodes")
+                continue
+            for _ in _walk_nodes(document, node_budget=node_budget):
+                pass
+            documents.append(document)
+        return documents
     except (RecursionError, yaml.YAMLError) as exc:
         raise ValueError(f"invalid YAML in configured file: {path}") from exc
 
 
-def _mapping_value(node: Node, name: str) -> Node | None:
-    if not isinstance(node, MappingNode):
-        return None
-    for key_node, value_node in node.value:
-        if isinstance(key_node, ScalarNode) and key_node.value == name:
-            return value_node
-    return None
+@dataclass(slots=True)
+class _MappingResolver:
+    """Resolve bounded YAML merge mappings without constructing repository values."""
+
+    cache: dict[tuple[int, str], Node | None] = field(default_factory=dict)
+    active: set[tuple[int, str]] = field(default_factory=set)
+
+    def value(self, node: Node, name: str) -> Node | None:
+        if not isinstance(node, MappingNode):
+            return None
+        key = (id(node), name)
+        if key in self.cache:
+            return self.cache[key]
+        if key in self.active:
+            return None
+        self.active.add(key)
+        try:
+            direct = [
+                value_node
+                for key_node, value_node in node.value
+                if isinstance(key_node, ScalarNode) and key_node.value == name
+            ]
+            resolved = direct[0] if direct else None
+            if resolved is None:
+                for key_node, value_node in node.value:
+                    if not isinstance(key_node, ScalarNode) or key_node.value != "<<":
+                        continue
+                    candidates: Sequence[Node]
+                    if isinstance(value_node, SequenceNode):
+                        candidates = value_node.value
+                    else:
+                        candidates = (value_node,)
+                    for candidate in candidates:
+                        resolved = self.value(candidate, name)
+                        if resolved is not None:
+                            break
+                    if resolved is not None:
+                        break
+            self.cache[key] = resolved
+            return resolved
+        finally:
+            self.active.remove(key)
 
 
-def _walk_nodes(node: Node) -> Iterable[Node]:
+def _walk_nodes(node: Node, *, node_budget: list[int] | None = None) -> Iterable[Node]:
     seen: set[int] = set()
     active: set[int] = set()
+    budget = node_budget if node_budget is not None else [0]
 
     def walk(current: Node, depth: int) -> Iterable[Node]:
         if depth > _MAX_YAML_DEPTH:
@@ -186,13 +261,20 @@ def _walk_nodes(node: Node) -> Iterable[Node]:
             return
 
         seen.add(identity)
-        if len(seen) > _MAX_YAML_NODES:
-            raise ValueError(f"YAML document exceeds {_MAX_YAML_NODES} nodes")
+        budget[0] += 1
+        if budget[0] > _MAX_YAML_NODES:
+            raise ValueError(f"YAML input exceeds {_MAX_YAML_NODES} nodes")
         active.add(identity)
         try:
             yield current
             if isinstance(current, MappingNode):
+                scalar_keys: set[tuple[str, str]] = set()
                 for key_node, value_node in current.value:
+                    if isinstance(key_node, ScalarNode):
+                        key = (key_node.tag, key_node.value)
+                        if key in scalar_keys:
+                            raise ValueError("duplicate YAML mapping key is not supported")
+                        scalar_keys.add(key)
                     yield from walk(key_node, depth + 1)
                     yield from walk(value_node, depth + 1)
             elif isinstance(current, SequenceNode):
@@ -227,7 +309,9 @@ def _literal_yaml_default(
     return _default_digest(node.value)
 
 
-def _compose_references(root: Path, path: Path, documents: Iterable[Node]) -> list[_Occurrence]:
+def _compose_references(
+    root: Path, path: Path, documents: Iterable[Node], budget: ScanBudget
+) -> list[_Occurrence]:
     occurrences: list[_Occurrence] = []
     for document in documents:
         for node in _walk_nodes(document):
@@ -237,29 +321,32 @@ def _compose_references(root: Path, path: Path, documents: Iterable[Node]) -> li
                 digest = None
                 if match.group("operator") in {":-", "-"}:
                     digest = _default_digest(match.group("argument") or "")
-                occurrences.append(
+                _append_occurrence(
+                    occurrences,
                     _Occurrence(
                         match.group("name") or match.group("plain_name"),
                         _node_location(root, path, node, match.start()),
                         digest,
-                    )
+                    ),
+                    budget,
                 )
     return occurrences
 
 
 def _compose_environment(
-    root: Path, path: Path, documents: Iterable[Node]
+    root: Path, path: Path, documents: Iterable[Node], budget: ScanBudget
 ) -> tuple[list[_Occurrence], list[ScalarNode]]:
     occurrences: list[_Occurrence] = []
     env_files: list[ScalarNode] = []
     for document in documents:
-        services = _mapping_value(document, "services")
+        mappings = _MappingResolver()
+        services = mappings.value(document, "services")
         if not isinstance(services, MappingNode):
             continue
         for _, service in services.value:
             if not isinstance(service, MappingNode):
                 continue
-            environment = _mapping_value(service, "environment")
+            environment = mappings.value(service, "environment")
             if isinstance(environment, MappingNode):
                 for key_node, value_node in environment.value:
                     if not isinstance(key_node, ScalarNode) or not _ENV_NAME_RE.fullmatch(
@@ -269,8 +356,13 @@ def _compose_environment(
                     if isinstance(value_node, ScalarNode) and (
                         value_node.tag == "tag:yaml.org,2002:null"
                     ):
-                        occurrences.append(
-                            _Occurrence(key_node.value, _node_location(root, path, key_node))
+                        _append_occurrence(
+                            occurrences,
+                            _Occurrence(
+                                key_node.value,
+                                _node_location(root, path, key_node),
+                            ),
+                            budget,
                         )
             elif isinstance(environment, SequenceNode):
                 for item in environment.value:
@@ -281,9 +373,13 @@ def _compose_environment(
                     if not _ENV_NAME_RE.fullmatch(name):
                         continue
                     if not separator:
-                        occurrences.append(_Occurrence(name, _node_location(root, path, item)))
+                        _append_occurrence(
+                            occurrences,
+                            _Occurrence(name, _node_location(root, path, item)),
+                            budget,
+                        )
 
-            env_file = _mapping_value(service, "env_file")
+            env_file = mappings.value(service, "env_file")
             candidates: list[Node] = []
             if isinstance(env_file, ScalarNode):
                 candidates.append(env_file)
@@ -291,7 +387,7 @@ def _compose_environment(
                 candidates.extend(env_file.value)
             for candidate in candidates:
                 if isinstance(candidate, MappingNode):
-                    candidate = _mapping_value(candidate, "path") or candidate
+                    candidate = mappings.value(candidate, "path") or candidate
                 if isinstance(candidate, ScalarNode):
                     env_files.append(candidate)
     return occurrences, env_files
@@ -302,12 +398,13 @@ def _scan_compose(
     path: Path,
     result: ScanResult,
     ignored_paths: Sequence[str],
+    budget: ScanBudget,
     diagnostics: SourceDiagnostics | None = None,
 ) -> list[_Occurrence]:
-    text = _read_scan_text(root, path)
+    text = _read_scan_text(root, path, budget)
     documents = _yaml_documents(text, path)
-    occurrences = _compose_references(root, path, documents)
-    environment, env_file_nodes = _compose_environment(root, path, documents)
+    occurrences = _compose_references(root, path, documents, budget)
+    environment, env_file_nodes = _compose_environment(root, path, documents, budget)
     occurrences.extend(environment)
     for env_file_node in env_file_nodes:
         reference = env_file_node.value.strip()
@@ -328,15 +425,19 @@ def _scan_compose(
             if diagnostics is not None:
                 diagnostics.record_ignored(relative, "configured_ignore")
             continue
+        budget.record_file(relative)
         result.scanned_files.add(relative)
         if diagnostics is not None:
             diagnostics.record_derived(relative)
-        occurrences.extend(_parse_dotenv(root, candidate))
+        occurrences.extend(_parse_dotenv(root, candidate, budget))
     return occurrences
 
 
-def _container_environment(root: Path, path: Path, document: Node) -> list[_Occurrence]:
+def _container_environment(
+    root: Path, path: Path, document: Node, budget: ScanBudget
+) -> list[_Occurrence]:
     occurrences: list[_Occurrence] = []
+    mappings = _MappingResolver()
     for node in _walk_nodes(document):
         if not isinstance(node, MappingNode):
             continue
@@ -348,105 +449,138 @@ def _container_environment(root: Path, path: Path, document: Node) -> list[_Occu
             ):
                 continue
             for container in value_node.value:
-                environment = _mapping_value(container, "env")
+                environment = mappings.value(container, "env")
                 if not isinstance(environment, SequenceNode):
                     continue
                 for entry in environment.value:
-                    name_node = _mapping_value(entry, "name")
+                    name_node = mappings.value(entry, "name")
                     if not isinstance(name_node, ScalarNode) or not _ENV_NAME_RE.fullmatch(
                         name_node.value
                     ):
                         continue
-                    value = _mapping_value(entry, "value")
+                    value = mappings.value(entry, "value")
                     digest = _literal_yaml_default(value, (_PLAIN_REFERENCE_RE,))
-                    occurrences.append(
+                    _append_occurrence(
+                        occurrences,
                         _Occurrence(
                             name_node.value,
                             _node_location(root, path, name_node),
                             digest,
-                        )
+                        ),
+                        budget,
                     )
     return occurrences
 
 
-def _scan_kubernetes(root: Path, path: Path) -> list[_Occurrence]:
-    text = _read_scan_text(root, path)
+def _scan_kubernetes(root: Path, path: Path, budget: ScanBudget) -> list[_Occurrence]:
+    text = _read_scan_text(root, path, budget)
     documents = _yaml_documents(text, path)
     occurrences: list[_Occurrence] = []
     for document in documents:
-        occurrences.extend(_container_environment(root, path, document))
+        occurrences.extend(_container_environment(root, path, document, budget))
         for node in _walk_nodes(document):
             if not isinstance(node, ScalarNode):
                 continue
             for match in _PLAIN_REFERENCE_RE.finditer(node.value):
-                occurrences.append(
+                _append_occurrence(
+                    occurrences,
                     _Occurrence(
                         match.group("name"),
                         _node_location(root, path, node, match.start()),
-                    )
+                    ),
+                    budget,
                 )
     return occurrences
 
 
-def _scan_workflow(root: Path, path: Path) -> list[_Occurrence]:
-    text = _read_scan_text(root, path)
+def _scan_workflow(root: Path, path: Path, budget: ScanBudget) -> list[_Occurrence]:
+    text = _read_scan_text(root, path, budget)
     documents = _yaml_documents(text, path)
     occurrences: list[_Occurrence] = []
     for document in documents:
         for node in _walk_nodes(document):
             if isinstance(node, ScalarNode):
                 for match in _GITHUB_REFERENCE_RE.finditer(node.value):
-                    occurrences.append(
+                    _append_occurrence(
+                        occurrences,
                         _Occurrence(
                             match.group("name"),
                             _node_location(root, path, node, match.start()),
-                        )
+                        ),
+                        budget,
                     )
     return occurrences
 
 
-def _spring_references_in_node(root: Path, path: Path, document: Node) -> list[_Occurrence]:
+def _spring_references_in_node(
+    root: Path, path: Path, document: Node, budget: ScanBudget
+) -> list[_Occurrence]:
     occurrences: list[_Occurrence] = []
+    static_properties: set[str] = set()
+    if isinstance(document, MappingNode):
+        for key_node, value_node in document.value:
+            if (
+                isinstance(key_node, ScalarNode)
+                and _ENV_NAME_RE.fullmatch(key_node.value)
+                and isinstance(value_node, ScalarNode)
+                and value_node.tag != "tag:yaml.org,2002:null"
+                and _SPRING_REFERENCE_RE.search(value_node.value) is None
+            ):
+                static_properties.add(key_node.value)
     for node in _walk_nodes(document):
         if not isinstance(node, ScalarNode):
             continue
         for match in _SPRING_REFERENCE_RE.finditer(node.value):
             default = match.group("default")
-            occurrences.append(
+            _append_occurrence(
+                occurrences,
                 _Occurrence(
                     match.group("name"),
                     _node_location(root, path, node, match.start()),
                     _default_digest(default) if default is not None else None,
-                )
+                ),
+                budget,
             )
-    return occurrences
+    return [item for item in occurrences if item.name not in static_properties]
 
 
-def _scan_spring(root: Path, path: Path) -> list[_Occurrence]:
-    text = _read_scan_text(root, path)
+def _scan_spring(root: Path, path: Path, budget: ScanBudget) -> list[_Occurrence]:
+    text = _read_scan_text(root, path, budget)
     if path.suffix.lower() != ".properties":
         documents = _yaml_documents(text, path)
         if documents:
             return [
                 occurrence
                 for document in documents
-                for occurrence in _spring_references_in_node(root, path, document)
+                for occurrence in _spring_references_in_node(root, path, document, budget)
             ]
 
     occurrences: list[_Occurrence] = []
+    property_is_static: dict[str, bool] = {}
     for line_number, line in enumerate(text.splitlines(), start=1):
         if line.lstrip().startswith(("#", "!")):
             continue
+        assignment = _SPRING_PROPERTY_ASSIGNMENT_RE.match(line)
+        if assignment is not None:
+            property_is_static[assignment.group("name")] = (
+                _SPRING_REFERENCE_RE.search(assignment.group("value")) is None
+            )
         for match in _SPRING_REFERENCE_RE.finditer(line):
             default = match.group("default")
-            occurrences.append(
+            _append_occurrence(
+                occurrences,
                 _Occurrence(
                     match.group("name"),
                     _location(root, path, line_number, match.start() + 1),
                     _default_digest(default) if default is not None else None,
-                )
+                ),
+                budget,
             )
-    return occurrences
+    return [
+        item
+        for item in occurrences
+        if property_is_static.get(item.name) is not True
+    ]
 
 
 def _as_patterns(value: Any, fallback: tuple[str, ...] = ()) -> tuple[str, ...]:
@@ -564,6 +698,29 @@ def _locations(occurrences: Iterable[_Occurrence]) -> list[Location]:
     return [unique[key] for key in sorted(unique)]
 
 
+def _bounded_evidence(
+    locations: Sequence[Location], hint: str, budget: ScanBudget
+) -> tuple[tuple[Location, ...], str]:
+    related, omitted = budget.bound_related(locations[1:])
+    if omitted:
+        hint = (
+            f"{hint} Showing the first {len(related)} related locations; "
+            f"{omitted} additional locations were omitted by the scan limit."
+        )
+    return related, hint
+
+
+def _append_finding(result: ScanResult, finding: Finding, budget: ScanBudget) -> None:
+    payload = json.dumps(
+        finding.as_dict(),
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    budget.record_finding(len(payload))
+    result.findings.append(finding)
+
+
 def scan_env_contracts(
     root: Path,
     config_mapping: Mapping[str, Any],
@@ -582,6 +739,7 @@ def scan_env_contracts(
     section = _env_config(config_mapping)
     ignored = _config_patterns(config_mapping, section, "ignore")
     result = ScanResult()
+    budget = ScanBudget("environment", "occurrences", _ENV_SCAN_LIMITS)
 
     contracts: list[_Occurrence] = []
     consumers: list[_Occurrence] = []
@@ -594,16 +752,22 @@ def scan_env_contracts(
     for path in contract_paths:
         relative = _relative_path(root, path)
         if relative is not None:
+            budget.record_file(relative)
             result.scanned_files.add(relative)
-        contracts.extend(_parse_dotenv(root, path))
+        contracts.extend(_parse_dotenv(root, path, budget))
 
     scanners = {
         "compose": lambda path, source_diagnostics: _scan_compose(
-            root, path, result, ignored, source_diagnostics
+            root,
+            path,
+            result,
+            ignored,
+            budget,
+            source_diagnostics,
         ),
-        "kubernetes": lambda path: _scan_kubernetes(root, path),
-        "workflows": lambda path: _scan_workflow(root, path),
-        "spring": lambda path: _scan_spring(root, path),
+        "kubernetes": lambda path: _scan_kubernetes(root, path, budget),
+        "workflows": lambda path: _scan_workflow(root, path, budget),
+        "spring": lambda path: _scan_spring(root, path, budget),
     }
     for scanner_name, scanner in scanners.items():
         patterns = _config_patterns(config_mapping, section, scanner_name)
@@ -614,6 +778,7 @@ def scan_env_contracts(
         for path in paths:
             relative = _relative_path(root, path)
             if relative is not None:
+                budget.record_file(relative)
                 result.scanned_files.add(relative)
             if scanner_name == "compose":
                 consumers.extend(scanner(path, source_diagnostics))
@@ -636,50 +801,62 @@ def scan_env_contracts(
 
     for name in sorted(consumers_by_name.keys() - contracts_by_name.keys()):
         locations = _locations(consumers_by_name[name])
-        result.findings.append(
+        hint = "Declare the variable in an environment contract or explicitly ignore it."
+        related, hint = _bounded_evidence(locations, hint, budget)
+        _append_finding(
+            result,
             Finding(
                 code="ENV001",
                 message=f"Environment variable '{name}' is consumed but missing from the contract.",
                 severity=Severity.ERROR,
                 location=locations[0],
-                hint="Declare the variable in an environment contract or explicitly ignore it.",
-                related=tuple(locations[1:]),
+                hint=hint,
+                related=related,
                 baseline_key=name,
-            )
+            ),
+            budget,
         )
 
     for name in sorted(contracts_by_name.keys() - consumers_by_name.keys()):
         locations = _locations(contracts_by_name[name])
-        result.findings.append(
+        hint = "Remove the stale declaration or add a matching consumer."
+        related, hint = _bounded_evidence(locations, hint, budget)
+        _append_finding(
+            result,
             Finding(
                 code="ENV002",
                 message=f"Contract variable '{name}' is not consumed.",
                 severity=Severity.WARNING,
                 location=locations[0],
-                hint="Remove the stale declaration or add a matching consumer.",
-                related=tuple(locations[1:]),
+                hint=hint,
+                related=related,
                 baseline_key=name,
-            )
+            ),
+            budget,
         )
 
     all_by_name: dict[str, list[_Occurrence]] = {}
-    for occurrence in (*contracts, *consumers):
+    for occurrence in chain(contracts, consumers):
         all_by_name.setdefault(occurrence.name, []).append(occurrence)
     for name in sorted(all_by_name):
         explicit = [item for item in all_by_name[name] if item.default_digest is not None]
         if len({item.default_digest for item in explicit}) <= 1:
             continue
         locations = _locations(explicit)
-        result.findings.append(
+        hint = "Choose one default across the contract and all consumers."
+        related, hint = _bounded_evidence(locations, hint, budget)
+        _append_finding(
+            result,
             Finding(
                 code="ENV003",
                 message=f"Environment variable '{name}' has conflicting explicit defaults.",
                 severity=Severity.WARNING,
                 location=locations[0],
-                hint="Choose one default across the contract and all consumers.",
-                related=tuple(locations[1:]),
+                hint=hint,
+                related=related,
                 baseline_key=name,
-            )
+            ),
+            budget,
         )
 
     return apply_rule_policy(result, config_mapping)

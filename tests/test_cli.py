@@ -1,13 +1,85 @@
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
+
+from repoinvariant import __version__
 from repoinvariant.cli import main
+
+PLUGIN_FIXTURE_SITE = Path(__file__).parent / "fixtures" / "plugins" / "site-packages"
+
+
+@pytest.mark.parametrize("module_name", ["pathlib", "yaml"])
+@pytest.mark.parametrize("shadow_source", ["working-directory", "pythonpath"])
+def test_python_m_bootstrap_does_not_import_working_tree_shadows(
+    tmp_path: Path, module_name: str, shadow_source: str
+) -> None:
+    working_directory = tmp_path / "repository"
+    working_directory.mkdir()
+    shadow_root = (
+        tmp_path / "pythonpath" if shadow_source == "pythonpath" else working_directory
+    )
+    shadow_root.mkdir(exist_ok=True)
+    marker = tmp_path / f"{module_name}-executed"
+    (shadow_root / f"{module_name}.py").write_text(
+        f"open({str(marker)!r}, 'w').write('executed')\n"
+        "raise RuntimeError('LOCAL_SHADOW_EXECUTED')\n",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    if shadow_source == "pythonpath":
+        environment["PYTHONPATH"] = str(shadow_root)
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "repoinvariant", "--version"],
+        cwd=working_directory,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == f"repoinvariant {__version__}\n"
+    assert not marker.exists()
 
 
 def _write_baseline_fixture(root: Path) -> None:
     (root / ".env.example").write_text("DECLARED=\n", encoding="utf-8")
     (root / "compose.yml").write_text(
         "services:\n  api:\n    environment:\n      REQUIRED: ${REQUIRED}\n",
+        encoding="utf-8",
+    )
+
+
+def _write_plugin_fixture(root: Path, marker: str = "TODO") -> None:
+    (root / "checks.todo").write_text("OK\nTODO\n", encoding="utf-8")
+    (root / ".repoinvariant.yml").write_text(
+        f"""version: 1
+env:
+  contracts: []
+  compose: []
+  kubernetes: []
+  workflows: []
+  spring: []
+  ignore: []
+features:
+  requirements: []
+  specifications: []
+  tests: []
+  ignore: []
+plugins:
+  sample.todo:
+    config:
+      marker: {marker}
+      patterns: ["**/*.todo"]
+    rules:
+      TODO001: error
+""",
         encoding="utf-8",
     )
 
@@ -111,6 +183,136 @@ versions:
     assert main(["check", str(tmp_path), "--no-versions", "--format", "json"]) == 0
     skipped = json.loads(capsys.readouterr().out)
     assert skipped["findings"] == []
+
+
+def test_explicit_plugin_check_and_baseline_are_scope_bound(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    monkeypatch.syspath_prepend(str(PLUGIN_FIXTURE_SITE))
+    _write_plugin_fixture(tmp_path)
+    common = ["--no-env", "--no-features", "--no-versions", "--plugin", "sample.todo"]
+
+    assert main(["check", str(tmp_path), *common, "--format", "json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert [(item["code"], item["location"]["path"]) for item in payload["findings"]] == [
+        ("sample.todo:TODO001", "checks.todo")
+    ]
+
+    assert main(["baseline", str(tmp_path), *common]) == 0
+    baseline_text = (tmp_path / ".repoinvariant-baseline.json").read_text(encoding="utf-8")
+    assert "sample.todo:TODO001" in baseline_text
+    assert "checks.todo" not in baseline_text
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "check",
+                str(tmp_path),
+                *common,
+                "--baseline",
+                ".repoinvariant-baseline.json",
+            ]
+        )
+        == 0
+    )
+    assert "1 suppressed" in capsys.readouterr().err
+
+    assert (
+        main(
+            [
+                "doctor",
+                str(tmp_path),
+                *common,
+                "--baseline",
+                ".repoinvariant-baseline.json",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    doctor_payload = json.loads(capsys.readouterr().out)
+    assert doctor_payload["baseline"]["status"] == "match"
+
+    assert (
+        main(
+            [
+                "doctor",
+                str(tmp_path),
+                "--no-env",
+                "--no-features",
+                "--no-versions",
+                "--baseline",
+                ".repoinvariant-baseline.json",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    doctor_without_plugin = json.loads(capsys.readouterr().out)
+    assert doctor_without_plugin["baseline"]["status"] == "mismatch"
+
+    assert (
+        main(
+            [
+                "check",
+                str(tmp_path),
+                "--no-env",
+                "--no-features",
+                "--no-versions",
+                "--baseline",
+                ".repoinvariant-baseline.json",
+            ]
+        )
+        == 2
+    )
+    assert "scope does not match" in capsys.readouterr().err
+
+    _write_plugin_fixture(tmp_path, marker="FIXME")
+    assert (
+        main(
+            [
+                "check",
+                str(tmp_path),
+                *common,
+                "--baseline",
+                ".repoinvariant-baseline.json",
+            ]
+        )
+        == 2
+    )
+    assert "scope does not match" in capsys.readouterr().err
+
+
+def test_plugin_cli_missing_duplicate_and_exception_paths_return_two(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    monkeypatch.syspath_prepend(str(PLUGIN_FIXTURE_SITE))
+
+    assert main(["check", str(tmp_path), "--plugin", "missing.plugin"]) == 2
+    assert "not installed" in capsys.readouterr().err
+
+    assert (
+        main(
+            [
+                "check",
+                str(tmp_path),
+                "--plugin",
+                "sample.todo",
+                "--plugin",
+                "sample.todo",
+            ]
+        )
+        == 2
+    )
+    assert "duplicate ID" in capsys.readouterr().err
+
+    assert main(["check", str(tmp_path), "--plugin", "sample.crash"]) == 2
+    error = capsys.readouterr().err
+    assert "failed during scanning" in error
+    assert "PRIVATE_FIXTURE_EXCEPTION_VALUE" not in error
 
 
 def test_check_escapes_control_characters_in_errors(

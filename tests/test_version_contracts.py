@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 import repoinvariant.version_contracts as versions
 from repoinvariant.models import Severity
+from repoinvariant.resource_budget import ScanBudget
 from repoinvariant.version_contracts import scan_version_contracts
 
 
@@ -93,6 +95,241 @@ kotlin { jvmToolchain(21) }
         Path(".github/workflows/ci.yml"),
         Path("README.md"),
     }
+
+
+def test_build_images_recognize_amazoncorretto_and_ibm_semeru_tags(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "Dockerfile",
+        "FROM maven:3.9.9-amazoncorretto-21-al2023 AS build\n",
+    )
+    _write(
+        tmp_path,
+        "compose.yaml",
+        "services:\n  build:\n    image: gradle:8.14.3-ibm-semeru-21-jammy\n",
+    )
+
+    result = scan_version_contracts(
+        tmp_path,
+        _config(required=["dockerfiles", "compose"]),
+    )
+
+    assert result.findings == []
+
+
+def test_maven_gradle_compatibility_and_java_version_file_match_contract(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "pom.xml",
+        """<project>
+  <properties>
+    <java.version>21</java.version>
+    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.source>21</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+  </properties>
+  <build><plugins><plugin>
+    <artifactId>maven-compiler-plugin</artifactId>
+    <configuration><release>21</release></configuration>
+    <executions><execution><configuration>
+      <source>21</source><target>21</target>
+    </configuration></execution></executions>
+  </plugin></plugins></build>
+</project>
+""",
+    )
+    _write(
+        tmp_path,
+        "build.gradle.kts",
+        "sourceCompatibility = JavaVersion.VERSION_21\n"
+        'targetCompatibility = "21"\n',
+    )
+    _write(tmp_path, ".java-version", "temurin-21.0.12+7\n")
+
+    result = scan_version_contracts(
+        tmp_path,
+        _config(required=["gradle", "maven", "version_files"]),
+    )
+
+    assert result.findings == []
+    assert {Path("pom.xml"), Path("build.gradle.kts"), Path(".java-version")} <= (
+        result.scanned_files
+    )
+
+
+def test_new_java_sources_report_static_and_unresolved_declarations(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "pom.xml",
+        """<project>
+  <properties><java.version>17</java.version></properties>
+  <build><plugins><plugin>
+    <artifactId>maven-compiler-plugin</artifactId>
+    <configuration><release>${java.version}</release></configuration>
+  </plugin></plugins></build>
+</project>
+""",
+    )
+    _write(
+        tmp_path,
+        "build.gradle",
+        "sourceCompatibility = JavaVersion.VERSION_17\n"
+        "targetCompatibility = javaTargetProvider.get()\n",
+    )
+    _write(tmp_path, ".java-version", "runtime-from-private-provider\n")
+
+    result = scan_version_contracts(tmp_path, _config())
+
+    assert [finding.code for finding in result.findings].count("VER001") == 2
+    assert [finding.code for finding in result.findings].count("VER002") == 3
+    rendered = repr([finding.as_dict() for finding in result.findings])
+    assert "javaTargetProvider" not in rendered
+    assert "runtime-from-private-provider" not in rendered
+
+
+def test_maven_compiler_source_and_target_surface_disagreement_without_values(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "pom.xml",
+        """<project>
+  <properties>
+    <maven.compiler.source>17</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+  </properties>
+  <build><plugins><plugin>
+    <artifactId>maven-compiler-plugin</artifactId>
+    <configuration>
+      <source>${private.source.provider}</source>
+      <target>21</target>
+    </configuration>
+  </plugin></plugins></build>
+</project>
+""",
+    )
+
+    result = scan_version_contracts(tmp_path, _config(required=["maven"]))
+
+    assert [finding.code for finding in result.findings] == ["VER001", "VER002"]
+    assert "private.source.provider" not in repr(
+        [finding.as_dict() for finding in result.findings]
+    )
+
+
+def test_typed_gradle_local_named_source_compatibility_is_not_a_declaration(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "build.gradle",
+        'String sourceCompatibility = "private-provider"\n'
+        "java.sourceCompatibility = JavaVersion.VERSION_21\n",
+    )
+
+    result = scan_version_contracts(tmp_path, _config(required=["gradle"]))
+
+    assert result.findings == []
+
+
+def test_maven_comments_unknown_plugins_and_invalid_xml_do_not_create_evidence(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "pom.xml",
+        """<project>
+  <!-- <properties><java.version>17</java.version></properties> -->
+  <profiles><profile><properties><java.version>17</java.version></properties></profile></profiles>
+  <build><plugins><plugin>
+    <artifactId>another-plugin</artifactId>
+    <configuration><release>17</release></configuration>
+  </plugin></plugins></build>
+</project>
+""",
+    )
+
+    result = scan_version_contracts(tmp_path, _config(required=["maven"]))
+
+    assert [finding.code for finding in result.findings] == ["VER003"]
+
+    _write(tmp_path, "pom.xml", "<project><properties></project>\n")
+    with pytest.raises(ValueError, match="invalid XML"):
+        scan_version_contracts(tmp_path, _config())
+
+
+def test_maven_dtd_is_rejected_without_entity_expansion(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "pom.xml",
+        '<!DOCTYPE project [<!ENTITY private "hidden">]>\n'
+        "<project><properties><java.version>&private;</java.version></properties></project>\n",
+    )
+
+    with pytest.raises(ValueError, match="not supported"):
+        scan_version_contracts(tmp_path, _config())
+
+
+def test_maven_dtd_examples_in_comments_and_cdata_are_tolerated(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "pom.xml",
+        """<project>
+  <!-- documentation example: <!DOCTYPE project> -->
+  <description><![CDATA[example: <!ENTITY name "value">]]></description>
+  <properties><java.version>21</java.version></properties>
+</project>
+""",
+    )
+
+    result = scan_version_contracts(tmp_path, _config(required=["maven"]))
+
+    assert result.findings == []
+
+
+def test_maven_unknown_unicode_element_is_ignored(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "pom.xml",
+        "<project><properties><日本語>ignored</日本語>"
+        "<java.version>21</java.version></properties></project>\n",
+    )
+
+    result = scan_version_contracts(tmp_path, _config(required=["maven"]))
+
+    assert result.findings == []
+
+
+def test_maven_value_location_skips_greater_than_inside_attribute(tmp_path: Path) -> None:
+    pom = (
+        '<project><properties><java.version note="allowed > character">'
+        "17</java.version></properties></project>\n"
+    )
+    _write(tmp_path, "pom.xml", pom)
+
+    result = scan_version_contracts(tmp_path, _config(required=["maven"]))
+
+    assert [finding.code for finding in result.findings] == ["VER001"]
+    assert result.findings[0].location is not None
+    assert result.findings[0].location.column == pom.index(">17") + 2
+
+
+def test_maven_cdata_value_location_points_to_the_literal(tmp_path: Path) -> None:
+    pom = (
+        "<project><properties><java.version><![CDATA[  17]]></java.version>"
+        "</properties></project>\n"
+    )
+    _write(tmp_path, "pom.xml", pom)
+
+    result = scan_version_contracts(tmp_path, _config(required=["maven"]))
+
+    assert [finding.code for finding in result.findings] == ["VER001"]
+    assert result.findings[0].location is not None
+    assert result.findings[0].location.column == pom.index("17]]>") + 1
 
 
 def test_mismatches_are_grouped_by_source_file_with_stable_keys(tmp_path: Path) -> None:
@@ -241,11 +478,11 @@ def test_repeated_version_file_references_are_read_once(
     reads = 0
     original = versions._read_scan_text
 
-    def counted(root: Path, path: Path) -> str:
+    def counted(root: Path, path: Path, budget: ScanBudget) -> str:
         nonlocal reads
         if path.name == ".java-version":
             reads += 1
-        return original(root, path)
+        return original(root, path, budget)
 
     monkeypatch.setattr(versions, "_read_scan_text", counted)
 
@@ -288,6 +525,8 @@ def test_comments_fences_and_unstructured_prose_are_not_declarations(tmp_path: P
         'val example = "jvmToolchain(17)"\n'
         'val multiline = """JavaLanguageVersion.of(17)"""\n'
         "def slashy = /jvmToolchain(17)/\n"
+        "def sourceCompatibility = 17\n"
+        "val targetCompatibility = JavaVersion.VERSION_17\n"
         "def returned() { return /jvmToolchain(17)/ }\n"
         "patterns << /jvmToolchain(17)/\n"
         "def dollarSlashy = $/JavaLanguageVersion.of(17)/$\n"
@@ -306,7 +545,7 @@ def test_comments_fences_and_unstructured_prose_are_not_declarations(tmp_path: P
     assert {finding.code for finding in result.findings} == {"VER003"}
 
 
-def test_quoted_gradle_major_is_supported_but_bytecode_target_is_not_a_toolchain(
+def test_quoted_gradle_major_and_bytecode_compatibility_declarations_are_supported(
     tmp_path: Path,
 ) -> None:
     _write(
@@ -319,7 +558,9 @@ def test_quoted_gradle_major_is_supported_but_bytecode_target_is_not_a_toolchain
 
     result = scan_version_contracts(tmp_path, _config(required=["gradle"]))
 
-    assert result.findings == []
+    mismatches = [finding for finding in result.findings if finding.code == "VER001"]
+    assert len(mismatches) == 1
+    assert len(mismatches[0].related) == 1
 
 
 def test_multiline_gradle_toolchain_is_not_skipped(tmp_path: Path) -> None:
@@ -450,6 +691,21 @@ def test_docker_arg_substitution_is_bounded_before_expansion(
     )
 
     with pytest.raises(ValueError, match="image expansion exceeds"):
+        scan_version_contracts(tmp_path, _config())
+
+
+def test_aggregate_version_input_bytes_are_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(tmp_path, "README.md", "none")
+    _write(tmp_path, "docs/other.md", "none")
+    monkeypatch.setattr(
+        versions,
+        "_VERSION_SCAN_LIMITS",
+        replace(versions._VERSION_SCAN_LIMITS, max_input_bytes=5),
+    )
+
+    with pytest.raises(ValueError, match="exceeds 5 total input bytes"):
         scan_version_contracts(tmp_path, _config())
 
 

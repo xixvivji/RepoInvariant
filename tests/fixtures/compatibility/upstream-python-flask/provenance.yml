@@ -1,0 +1,22 @@
+fixture: upstream-python-flask
+kind: immutable-upstream-syntax
+copied_bytes: true
+observed_at: "2026-08-01"
+observation_method: github-contents-api-at-pinned-commit
+source:
+  repository: https://github.com/pallets/flask
+  commit: 6a2f545bfd8ed31e19066a299296917e034aca58
+  license: BSD-3-Clause
+  license_path: LICENSE.txt
+files:
+  - source_path: examples/tutorial/pyproject.toml
+    fixture_path: pyproject.toml
+    git_blob_sha: 9295c5928db201756a1a2f7adf3e3ecaa56a3aa1
+    sha256: 1b2ff9761cb43059ed8df3f1c27d93cd93c3bf9297fe7fe5716da943a75012ac
+    size_bytes: 873
+  - source_path: LICENSE.txt
+    fixture_path: LICENSE.upstream
+    git_blob_sha: 9d227a0cc43c3268d15722b763bd94ad298645a1
+    sha256: 489a8e1108509ed98a37bb983e11e0f7e1d31f0bd8f99a79c8448e7ff37d07ea
+    size_bytes: 1475
+purpose: Exercise Python packaging metadata in a real Flask tutorial project.

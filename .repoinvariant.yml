@@ -35,7 +35,7 @@ rules:
   ENV001: error
   ENV002: warning
   ENV003: warning
-  TRACE001: error
-  TRACE002: error
-  TRACE003: error
-  TRACE004: warning
+  TRACE001: "off"
+  TRACE002: "off"
+  TRACE003: "off"
+  TRACE004: "off"

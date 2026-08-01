@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +29,16 @@ MAX_BASELINE_BYTES = MAX_SCAN_BYTES
 MAX_BASELINE_FINDINGS = 10_000
 
 _SHA256_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$", re.ASCII)
-_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{0,31}$", re.ASCII)
+_PLUGIN_ID_RE = re.compile(
+    r"^[a-z][a-z0-9]{0,31}(?:[._-][a-z0-9][a-z0-9]{0,31})*$",
+    re.ASCII,
+)
+_CODE_RE = re.compile(
+    r"^(?=.{1,97}\Z)(?:[A-Z][A-Z0-9]{0,31}|"
+    r"[a-z][a-z0-9]{0,31}(?:[._-][a-z0-9][a-z0-9]{0,31})*:"
+    r"[A-Z][A-Z0-9]{0,31})$",
+    re.ASCII,
+)
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$", re.ASCII)
 
 
@@ -137,18 +146,51 @@ def _effective_config(config: Mapping[str, Any]) -> dict[str, Any]:
     return effective
 
 
+def _normalized_plugin_scope(
+    plugin_scope: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    if isinstance(plugin_scope, (str, bytes)) or not isinstance(plugin_scope, Sequence):
+        raise BaselineError("plugin scope must be a sequence")
+    if len(plugin_scope) > 32:
+        raise BaselineError("plugin scope must not contain more than 32 entries")
+    normalized: list[dict[str, Any]] = []
+    plugin_ids: set[str] = set()
+    for item in plugin_scope:
+        if not isinstance(item, Mapping) or not isinstance(item.get("id"), str):
+            raise BaselineError("plugin scope contains an invalid entry")
+        plugin_id = item["id"]
+        if len(plugin_id) > 64 or not _PLUGIN_ID_RE.fullmatch(plugin_id):
+            raise BaselineError("plugin scope contains an invalid entry")
+        if plugin_id in plugin_ids:
+            raise BaselineError("plugin scope contains a duplicate ID")
+        plugin_ids.add(plugin_id)
+        try:
+            copied = json.loads(_canonical_json(item))
+        except (BaselineError, TypeError, ValueError, RecursionError, json.JSONDecodeError) as exc:
+            raise BaselineError("plugin scope contains an invalid entry") from exc
+        if not isinstance(copied, dict):
+            raise BaselineError("plugin scope contains an invalid entry")
+        normalized.append(copied)
+    return sorted(normalized, key=lambda item: item["id"])
+
+
 def compute_scope_digest(
     config: Mapping[str, Any],
     *,
     no_env: bool = False,
     no_features: bool = False,
     no_versions: bool = False,
+    plugin_scope: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     """Hash the effective scan configuration and enabled scanner set."""
 
     if any(type(flag) is not bool for flag in (no_env, no_features, no_versions)):
         raise BaselineError("scanner selection flags must be booleans")
     effective = _effective_config(config)
+    # Plugin configuration is inert without an explicit CLI selection. Selected plugin
+    # configuration is included below with its installed distribution and declared-rule metadata.
+    effective.pop("plugins", None)
+    normalized_plugins = _normalized_plugin_scope(plugin_scope)
     enabled_scanners = [
         name
         for name, disabled in (("env", no_env), ("features", no_features))
@@ -157,11 +199,15 @@ def compute_scope_digest(
     versions = effective.get("versions")
     if isinstance(versions, Mapping) and "java" in versions and not no_versions:
         enabled_scanners.append("versions")
+    if normalized_plugins:
+        enabled_scanners.append("plugins")
     payload = {
         "config": effective,
         "enabled_scanners": enabled_scanners,
         "fingerprint_version": FINGERPRINT_VERSION,
     }
+    if normalized_plugins:
+        payload["plugins"] = normalized_plugins
     return _sha256(_canonical_json(payload))
 
 
@@ -233,6 +279,7 @@ def create_baseline(
     no_env: bool = False,
     no_features: bool = False,
     no_versions: bool = False,
+    plugin_scope: Sequence[Mapping[str, Any]] = (),
     tool_version: str = __version__,
 ) -> Baseline:
     """Create a baseline from matchable findings without retaining finding payloads."""
@@ -262,6 +309,7 @@ def create_baseline(
             no_env=no_env,
             no_features=no_features,
             no_versions=no_versions,
+            plugin_scope=plugin_scope,
         ),
         findings=tuple(entries),
     )
@@ -410,6 +458,7 @@ def apply_baseline(
     no_env: bool = False,
     no_features: bool = False,
     no_versions: bool = False,
+    plugin_scope: Sequence[Mapping[str, Any]] = (),
 ) -> BaselineApplication:
     """Suppress matching accepted findings while leaving the source result unchanged."""
 
@@ -419,6 +468,7 @@ def apply_baseline(
         no_env=no_env,
         no_features=no_features,
         no_versions=no_versions,
+        plugin_scope=plugin_scope,
     )
     if not hmac.compare_digest(baseline.scope_digest, expected_scope):
         raise BaselineError(

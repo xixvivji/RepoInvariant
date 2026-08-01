@@ -1,6 +1,5 @@
-"""Support ``python -m repoinvariant``."""
+"""Support ``python -m repoinvariant`` through the import-safe CLI bootstrap."""
 
-from repoinvariant.cli import main
+from repoinvariant._entrypoint import main
 
 raise SystemExit(main())
-

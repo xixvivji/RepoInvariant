@@ -1,0 +1,22 @@
+fixture: upstream-spring-petclinic
+kind: immutable-upstream-syntax
+copied_bytes: true
+observed_at: "2026-08-01"
+observation_method: github-contents-api-at-pinned-commit
+source:
+  repository: https://github.com/spring-projects/spring-petclinic
+  commit: 88e37c15cf6fc8490b01bc3e8e2c800cec1ac272
+  license: Apache-2.0
+  license_path: LICENSE.txt
+files:
+  - source_path: src/main/resources/application.properties
+    fixture_path: src/main/resources/application.properties
+    git_blob_sha: d000edb6a50e07bd7ac2c70f8768d1f776ad3a3b
+    sha256: 67c1e7e0a0443d290301449110005ab75d223add305ed9c06897437df686de0e
+    size_bytes: 981
+  - source_path: LICENSE.txt
+    fixture_path: LICENSE.upstream
+    git_blob_sha: ff77379631504c17ad0a94dddc6803f0d3fb0fbb
+    sha256: 56dfc19e0dc836e30177332f73e8e6fbc297941acf3d906eec6eaaa46c2c452a
+    size_bytes: 11360
+purpose: Exercise Spring properties syntax with nested placeholder resolution.

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from repoinvariant.env_contracts import scan_env_contracts
 from repoinvariant.models import Severity
 
@@ -134,6 +136,63 @@ def test_compose_environment_tracks_sources_and_bare_passthrough_only(tmp_path: 
     }
 
 
+def test_compose_environment_resolves_yaml_merge_inheritance(tmp_path: Path) -> None:
+    (tmp_path / "compose.yml").write_text(
+        """x-app: &app
+  environment:
+    - REQUIRED
+services:
+  app:
+    <<: *app
+""",
+        encoding="utf-8",
+    )
+
+    result = scan_env_contracts(
+        tmp_path,
+        {
+            "contracts": [],
+            "compose": ["compose.yml"],
+            "kubernetes": [],
+            "workflows": [],
+            "spring": [],
+        },
+    )
+
+    assert _names_for(result, "ENV001") == {"REQUIRED"}
+
+
+def test_environment_yaml_duplicate_keys_fail_closed(tmp_path: Path) -> None:
+    (tmp_path / "compose.yml").write_text(
+        """services:
+  app:
+    environment: [A]
+    environment: [B]
+""",
+        encoding="utf-8",
+    )
+    compose_config = {
+        "contracts": [],
+        "compose": ["compose.yml"],
+        "kubernetes": [],
+        "workflows": [],
+        "spring": [],
+    }
+
+    with pytest.raises(ValueError, match="duplicate YAML mapping key"):
+        scan_env_contracts(tmp_path, compose_config)
+
+    (tmp_path / "compose.yml").unlink()
+    (tmp_path / "application.yml").write_text(
+        "DB_URL: jdbc:h2:mem:local\nDB_URL: ${DB_URL}\n",
+        encoding="utf-8",
+    )
+    spring_config = {**compose_config, "compose": [], "spring": ["application.yml"]}
+
+    with pytest.raises(ValueError, match="duplicate YAML mapping key"):
+        scan_env_contracts(tmp_path, spring_config)
+
+
 def test_workflow_tracks_secret_and_variable_references_not_literal_env_keys(
     tmp_path: Path,
 ) -> None:
@@ -168,6 +227,97 @@ jobs:
     )
 
     assert _names_for(result, "ENV001") == {"SECRET_SOURCE", "VARIABLE_SOURCE"}
+
+
+def test_spring_static_local_property_satisfies_only_its_own_placeholders(
+    tmp_path: Path,
+) -> None:
+    application = tmp_path / "application.properties"
+    application.write_text(
+        """database=h2
+spring.sql.init.schema-locations=classpath*:db/${database}/schema.sql
+DB_URL=${DB_URL}
+spring.remote.url=${UNDEFINED_URL}
+""",
+        encoding="utf-8",
+    )
+
+    result = scan_env_contracts(
+        tmp_path,
+        {
+            "contracts": [],
+            "compose": [],
+            "kubernetes": [],
+            "workflows": [],
+            "spring": [application.name],
+        },
+    )
+
+    assert _names_for(result, "ENV001") == {"DB_URL", "UNDEFINED_URL"}
+    assert "database" not in _names_for(result, "ENV001")
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("DB_URL=jdbc:h2:mem:local\nDB_URL=${DB_URL}\n", {"DB_URL"}),
+        ("DB_URL=${DB_URL}\nDB_URL=jdbc:h2:mem:local\n", set()),
+    ],
+)
+def test_spring_properties_uses_final_assignment_for_local_static_suppression(
+    tmp_path: Path,
+    content: str,
+    expected: set[str],
+) -> None:
+    (tmp_path / "application.properties").write_text(content, encoding="utf-8")
+
+    result = scan_env_contracts(
+        tmp_path,
+        {
+            "contracts": [],
+            "compose": [],
+            "kubernetes": [],
+            "workflows": [],
+            "spring": ["application.properties"],
+        },
+    )
+
+    assert _names_for(result, "ENV001") == expected
+
+
+def test_spring_yaml_static_local_property_is_not_an_environment_consumer(
+    tmp_path: Path,
+) -> None:
+    application = tmp_path / "application.yml"
+    application.write_text(
+        """database: h2
+schema: classpath:db/${database}/schema.sql
+REMOTE_URL: ${REMOTE_URL}
+undefined: ${UNDEFINED_YAML}
+nested:
+  NESTED_ONLY: literal
+unresolved-nested: ${NESTED_ONLY}
+""",
+        encoding="utf-8",
+    )
+
+    result = scan_env_contracts(
+        tmp_path,
+        {
+            "contracts": [],
+            "compose": [],
+            "kubernetes": [],
+            "workflows": [],
+            "spring": [application.name],
+        },
+    )
+
+    assert _names_for(result, "ENV001") == {
+        "NESTED_ONLY",
+        "REMOTE_URL",
+        "UNDEFINED_YAML",
+    }
+    assert "database" not in _names_for(result, "ENV001")
 
 
 def test_environment_findings_apply_rule_policy(tmp_path: Path) -> None:

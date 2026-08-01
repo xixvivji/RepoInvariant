@@ -31,6 +31,10 @@ inputs:
     description: Minimum blocking severity (error or warning).
     required: false
     default: error
+  strict:
+    description: Run doctor --strict before checking contracts.
+    required: false
+    default: "false"
   no-env:
     description: Set to true to skip environment-contract checks.
     required: false
@@ -86,6 +90,7 @@ runs:
         REPOINVARIANT_OUTPUT: ${{ inputs.output }}
         REPOINVARIANT_BASELINE: ${{ inputs.baseline }}
         REPOINVARIANT_FAIL_ON: ${{ inputs.fail-on }}
+        REPOINVARIANT_STRICT: ${{ inputs.strict }}
         REPOINVARIANT_NO_ENV: ${{ inputs.no-env }}
         REPOINVARIANT_NO_FEATURES: ${{ inputs.no-features }}
         REPOINVARIANT_NO_VERSIONS: ${{ inputs.no-versions }}
@@ -93,32 +98,48 @@ runs:
       run: |
         set -Eeuo pipefail
 
-        args=(check --github-actions "--format=$REPOINVARIANT_FORMAT" "--fail-on=$REPOINVARIANT_FAIL_ON")
+        selection_args=()
         if [[ -n "$REPOINVARIANT_CONFIG" ]]; then
-          args+=("--config=$REPOINVARIANT_CONFIG")
-        fi
-        if [[ -n "$REPOINVARIANT_OUTPUT" ]]; then
-          args+=("--output=$REPOINVARIANT_OUTPUT")
+          selection_args+=("--config=$REPOINVARIANT_CONFIG")
         fi
         if [[ -n "$REPOINVARIANT_BASELINE" ]]; then
-          args+=("--baseline=$REPOINVARIANT_BASELINE")
+          selection_args+=("--baseline=$REPOINVARIANT_BASELINE")
         fi
 
         case "$REPOINVARIANT_NO_ENV" in
-          true) args+=(--no-env) ;;
+          true) selection_args+=(--no-env) ;;
           false) ;;
           *) printf 'no-env must be true or false, got %q\n' "$REPOINVARIANT_NO_ENV" >&2; exit 2 ;;
         esac
         case "$REPOINVARIANT_NO_FEATURES" in
-          true) args+=(--no-features) ;;
+          true) selection_args+=(--no-features) ;;
           false) ;;
           *) printf 'no-features must be true or false, got %q\n' "$REPOINVARIANT_NO_FEATURES" >&2; exit 2 ;;
         esac
         case "$REPOINVARIANT_NO_VERSIONS" in
-          true) args+=(--no-versions) ;;
+          true) selection_args+=(--no-versions) ;;
           false) ;;
           *) printf 'no-versions must be true or false, got %q\n' "$REPOINVARIANT_NO_VERSIONS" >&2; exit 2 ;;
         esac
+        case "$REPOINVARIANT_STRICT" in
+          true)
+            doctor_args=(doctor --strict)
+            if (( ${#selection_args[@]} )); then
+              doctor_args+=("${selection_args[@]}")
+            fi
+            doctor_args+=(-- "$REPOINVARIANT_PATH")
+            uv run --project "$REPOINVARIANT_ACTION_PATH" --frozen repoinvariant "${doctor_args[@]}"
+            ;;
+          false) ;;
+          *) printf 'strict must be true or false, got %q\n' "$REPOINVARIANT_STRICT" >&2; exit 2 ;;
+        esac
 
+        args=(check --github-actions "--format=$REPOINVARIANT_FORMAT" "--fail-on=$REPOINVARIANT_FAIL_ON")
+        if (( ${#selection_args[@]} )); then
+          args+=("${selection_args[@]}")
+        fi
+        if [[ -n "$REPOINVARIANT_OUTPUT" ]]; then
+          args+=("--output=$REPOINVARIANT_OUTPUT")
+        fi
         args+=(-- "$REPOINVARIANT_PATH")
         uv run --project "$REPOINVARIANT_ACTION_PATH" --frozen repoinvariant "${args[@]}"

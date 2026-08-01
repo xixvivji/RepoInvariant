@@ -9,6 +9,8 @@ import stat
 from contextlib import suppress
 from pathlib import Path
 
+from repoinvariant.resource_budget import ScanBudget
+
 MAX_CONFIG_BYTES = 256 * 1024
 MAX_SCAN_BYTES = 2 * 1024 * 1024
 MAX_SCAN_FILES = 10_000
@@ -94,6 +96,7 @@ def read_limited_text(
     root: Path | None = None,
     max_bytes: int = MAX_SCAN_BYTES,
     errors: str = "strict",
+    budget: ScanBudget | None = None,
 ) -> str:
     """Read a regular file through a no-follow descriptor with a hard byte limit."""
 
@@ -117,9 +120,13 @@ def read_limited_text(
             raise ValueError(f"configured path is not a regular file: {path}")
         if metadata.st_size > max_bytes:
             raise ValueError(f"configured file exceeds {max_bytes} bytes: {path}")
+        if budget is not None and metadata.st_size > budget.remaining_input_bytes:
+            budget.record_input_bytes(metadata.st_size)
 
         chunks: list[bytes] = []
         remaining = max_bytes + 1
+        if budget is not None:
+            remaining = min(remaining, budget.remaining_input_bytes + 1)
         while remaining:
             chunk = os.read(file_descriptor, min(64 * 1024, remaining))
             if not chunk:
@@ -129,6 +136,8 @@ def read_limited_text(
         data = b"".join(chunks)
         if len(data) > max_bytes:
             raise ValueError(f"configured file exceeds {max_bytes} bytes: {path}")
+        if budget is not None:
+            budget.record_input_bytes(len(data))
         return data.decode("utf-8-sig", errors=errors)
     finally:
         if file_descriptor is not None:

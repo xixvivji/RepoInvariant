@@ -37,7 +37,14 @@ def test_config_schema_is_valid_draft_2020_12() -> None:
 
 
 def test_schema_keys_and_default_annotations_track_the_runtime_contract() -> None:
-    assert set(SCHEMA["properties"]) == {"version", "env", "features", "versions", "rules"}
+    assert set(SCHEMA["properties"]) == {
+        "version",
+        "env",
+        "features",
+        "versions",
+        "plugins",
+        "rules",
+    }
 
     env = SCHEMA["$defs"]["environment"]["properties"]
     features = SCHEMA["$defs"]["features"]["properties"]
@@ -73,7 +80,23 @@ def test_schema_keys_and_default_annotations_track_the_runtime_contract() -> Non
             "versions": {
                 "java": {
                     "expected": "999",
-                    "required": ["gradle", "dockerfiles", "compose", "workflows", "docs"],
+                    "required": [
+                        "gradle",
+                        "maven",
+                        "version_files",
+                        "dockerfiles",
+                        "compose",
+                        "workflows",
+                        "docs",
+                    ],
+                }
+            }
+        },
+        {
+            "plugins": {
+                "sample.todo": {
+                    "config": {"patterns": ["**/*.todo"], "enabled": True},
+                    "rules": {"TODO001": "warning"},
                 }
             }
         },
@@ -124,12 +147,54 @@ def test_schema_accepts_every_supported_partial_configuration(
             id="duplicate-required-source",
         ),
         pytest.param(
-            {"versions": {"java": {"expected": "21", "required": ["maven"]}}},
+            {"versions": {"java": {"expected": "21", "required": ["ant"]}}},
             id="unknown-required-source",
+        ),
+        pytest.param({"plugins": []}, id="plugins-not-mapping"),
+        pytest.param({"plugins": {"Bad ID": {}}}, id="invalid-plugin-id"),
+        pytest.param({"plugins": {"a" * 65: {}}}, id="long-plugin-id"),
+        pytest.param(
+            {"plugins": {"sample.todo": {"unknown": {}}}},
+            id="unknown-plugin-setting",
+        ),
+        pytest.param(
+            {"plugins": {"sample.todo": {"config": []}}},
+            id="plugin-config-not-mapping",
+        ),
+        pytest.param(
+            {"plugins": {"sample.todo": {"config": {"k" * 129: 1}}}},
+            id="long-plugin-config-key",
+        ),
+        pytest.param(
+            {"plugins": {"sample.todo": {"config": {"key": "x" * 4_097}}}},
+            id="long-plugin-config-string",
+        ),
+        pytest.param(
+            {"plugins": {"sample.todo": {"config": {"key": [0] * 1_025}}}},
+            id="long-plugin-config-list",
+        ),
+        pytest.param(
+            {
+                "plugins": {
+                    "sample.todo": {
+                        "config": {"key": {str(index): 0 for index in range(1_025)}}
+                    }
+                }
+            },
+            id="large-plugin-config-mapping",
+        ),
+        pytest.param(
+            {"plugins": {"sample.todo": {"rules": {"bad": "error"}}}},
+            id="invalid-plugin-rule",
+        ),
+        pytest.param(
+            {"plugins": {"sample.todo": {"rules": {"TODO001": []}}}},
+            id="unhashable-plugin-severity",
         ),
         pytest.param({"rules": {"UNKNOWN": "error"}}, id="unknown-rule"),
         pytest.param({"rules": {"ENV001": "maybe"}}, id="unknown-severity"),
         pytest.param({"rules": {"ENV001": True}}, id="true-severity"),
+        pytest.param({"rules": {"ENV001": []}}, id="unhashable-core-severity"),
     ],
 )
 def test_schema_and_runtime_reject_invalid_raw_configuration(
@@ -160,7 +225,15 @@ def test_starter_repository_and_readme_configs_validate_against_the_schema(
     assert yaml_block.strip().splitlines()[0] == modeline
     readme_raw = yaml.safe_load(yaml_block)
     VALIDATOR.validate(readme_raw)
-    for source in ("gradle", "dockerfiles", "compose", "workflows", "docs"):
+    for source in (
+        "gradle",
+        "maven",
+        "version_files",
+        "dockerfiles",
+        "compose",
+        "workflows",
+        "docs",
+    ):
         assert readme_raw["versions"]["java"][source] == VERSION_JAVA_DEFAULTS[source]
 
     (tmp_path / ".repoinvariant.yml").write_text(yaml_block, encoding="utf-8")

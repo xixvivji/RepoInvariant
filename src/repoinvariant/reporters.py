@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import unicodedata
 from pathlib import Path
@@ -10,6 +11,9 @@ from urllib.parse import quote
 
 from repoinvariant import __version__
 from repoinvariant.models import Finding, ScanResult, Severity
+
+MAX_SARIF_RESULTS = 25_000
+MAX_SARIF_COMPRESSED_BYTES = 10 * 1024 * 1024
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -157,6 +161,11 @@ def render_sarif(
 ) -> str:
     del fail_on  # SARIF encodes finding levels; the process exit policy is separate.
     findings = result.sorted_findings()
+    if len(findings) > MAX_SARIF_RESULTS:
+        raise ValueError(
+            "SARIF report exceeds GitHub's limit of "
+            f"{MAX_SARIF_RESULTS:,} results per run"
+        )
     rules: dict[str, dict[str, Any]] = {}
     sarif_results: list[dict[str, Any]] = []
     for item in findings:
@@ -165,7 +174,7 @@ def render_sarif(
             {
                 "id": item.code,
                 "name": item.code,
-                "shortDescription": {"text": item.message},
+                "shortDescription": {"text": f"RepoInvariant finding {item.code}"},
                 "defaultConfiguration": {"level": _sarif_level(item.severity)},
             },
         )
@@ -206,7 +215,14 @@ def render_sarif(
             }
         ],
     }
-    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    compressed_size = len(gzip.compress(rendered.encode("utf-8"), mtime=0))
+    if compressed_size > MAX_SARIF_COMPRESSED_BYTES:
+        raise ValueError(
+            "SARIF report exceeds GitHub's 10 MiB compressed upload limit "
+            f"({compressed_size:,} bytes)"
+        )
+    return rendered
 
 
 def _sarif_level(severity: Severity) -> str:

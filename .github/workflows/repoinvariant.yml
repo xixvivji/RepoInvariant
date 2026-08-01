@@ -3,9 +3,12 @@ name: RepoInvariant
 on:
   pull_request:
     branches: [main, develop]
+  push:
+    branches: [main, develop]
 
 permissions:
   contents: read
+  security-events: write
 
 concurrency:
   group: repoinvariant-${{ github.ref }}
@@ -28,6 +31,7 @@ jobs:
           format: sarif
           output: repoinvariant-report.sarif
           fail-on: error
+          strict: "true"
           no-env: "false"
           no-features: "false"
       - name: Verify RepoInvariant outputs
@@ -97,3 +101,13 @@ jobs:
           path: ${{ steps.repoinvariant.outputs.report-path || 'repoinvariant-report.sarif' }}
           if-no-files-found: warn
           retention-days: 7
+      - name: Upload RepoInvariant results to Code Scanning
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        if: >-
+          always() &&
+          steps.repoinvariant.outputs.report-path != '' &&
+          (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository)
+        with:
+          sarif_file: ${{ steps.repoinvariant.outputs.report-path }}
+          category: repoinvariant

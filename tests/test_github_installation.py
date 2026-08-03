@@ -10,7 +10,7 @@ CODEQL_UPLOAD = (
 )
 REPOINVARIANT_ACTION = (
     "xixvivji/RepoInvariant@"
-    "d045e7844f636b20473efeff4e9f62cbfcf16690 # v0.5.0"
+    "13d76e9e43a308f9adc592376112df27a35ef90d # v0.5.1"
 )
 
 

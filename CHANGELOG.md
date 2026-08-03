@@ -4,6 +4,15 @@ All notable changes will be documented in this file. The project follows Semanti
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-03
+
+### Changed
+
+- Updated the pinned PyPI Trusted Publishing action from `v1.14.1` to `v1.14.2`,
+  bringing Twine 7 and refreshed Sigstore publishing dependencies to the release path.
+- Updated Ruff from `0.16.0` to `0.16.1` for development and release validation.
+- Pinned the documented Action to an immutable `v0.5.1` release source commit.
+
 ## [0.5.0] - 2026-08-01
 
 ### Added
